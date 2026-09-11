@@ -59,6 +59,15 @@ uv run luca serve --db acme.db --siren 123456789 --name ACME
 
 Python 3.12 or later. Runtime dependencies: the MCP Python SDK, uvicorn, and what they pull in.
 
+Or the image, published on GHCR for `linux/amd64` and `linux/arm64` at every `v*` tag, with a volume for the store and the port published:
+
+```sh
+docker run --rm -v luca:/data -p 8000:8000 ghcr.io/cordo-capital/luca --db /data/luca.db --siren 123456789 --name ACME
+mkdir -p data && container run --rm -v "$PWD/data:/data" -p 8000:8000 ghcr.io/cordo-capital/luca --db /data/luca.db --siren 123456789 --name ACME
+```
+
+`--siren` and `--name` are needed the first time only; afterwards the image's default arguments, `--db /data/luca.db`, are enough. The image runs as uid 1000, and Apple Containers mount named volumes as root: bind a host directory there.
+
 ## Documentation
 
 - [`docs/spec/`](docs/spec/) — [the store](docs/spec/store.md), [the endpoints and their rules](docs/spec/endpoints.md), [canonical content, replay and conflict](docs/spec/canonical.md), [`annule`](docs/spec/annule.md), [reading](docs/spec/query.md), [starting a société](docs/spec/startup.md), [the glossary](docs/spec/glossary.md).

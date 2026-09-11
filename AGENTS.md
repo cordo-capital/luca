@@ -28,6 +28,7 @@ It does **not** collect documents, interpret them, choose comptes, hold a brouil
 - Decisions that constrain the future go in `docs/decisions/` as a new numbered ADR. Never edit the body of a past ADR.
 - The repository describes what exists. No roadmap, no planned feature, no reserved command, no unused table or column. GitHub issues are for people reporting a problem while using luca, not for planning.
 - Prefer removing to adding. Runtime dependencies are the MCP Python SDK, an ASGI server, and what they pull in. Nothing else.
+- The `Dockerfile` and the release workflow are packaging, not deployment: no path, no société, no port choice, no tunnel, no replication in the repository. That is the infrastructure of whoever deploys.
 - English everywhere except the terms above. Conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`).
 
 ## Commands
@@ -49,6 +50,7 @@ src/luca/             cli.py (serve), store.py (file, schema, connections), ledg
                       query.py (read path), server.py (HTTP routes and MCP tools)
 src/luca/migrations/  numbered SQL migrations; 0001 is the schema
 tests/                pytest, against a server on a store in tmp_path
+Dockerfile            the image: python slim, pip install, non-root, /data
 docs/spec/            the domain, one page per stable subject
 docs/decisions/       ADRs, numbered, immutable
 ```

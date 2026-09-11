@@ -18,3 +18,13 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src
       - run: uv run pytest
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t luca .
+      - name: luca serve --help answers inside the image, as a non-root user
+        run: |
+          docker run --rm luca --help | grep -q -- "--db"
+          test "$(docker run --rm --entrypoint id luca -u)" != 0
