@@ -75,13 +75,17 @@ def migrate(conn: sqlite3.Connection) -> list[int]:
 def _connect(path: Path, mode: str) -> sqlite3.Connection:
     if sqlite3.sqlite_version_info < _MIN_SQLITE:
         raise StoreError(f"SQLite {sqlite3.sqlite_version} is too old, need >= 3.37")
-    return sqlite3.connect(
-        path.resolve().as_uri() + f"?mode={mode}",
-        uri=True,
-        isolation_level=None,  # no implicit transactions: BEGIN and COMMIT are explicit
-        check_same_thread=False,  # one connection, serialised by a lock, used from worker threads
-        timeout=_BUSY_TIMEOUT,
-    )
+    try:
+        return sqlite3.connect(
+            path.resolve().as_uri() + f"?mode={mode}",
+            uri=True,
+            isolation_level=None,  # no implicit transactions: BEGIN and COMMIT are explicit
+            check_same_thread=False,  # one connection, serialised by a lock, used from workers
+            timeout=_BUSY_TIMEOUT,
+        )
+    except sqlite3.OperationalError as exc:
+        # a missing directory, a directory luca cannot write to, a file it cannot read
+        raise StoreError(f"cannot open {path}: {exc}") from None
 
 
 def _authorize(

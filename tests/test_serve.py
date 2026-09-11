@@ -44,6 +44,17 @@ def test_serve_needs_the_identity_to_create(
     assert not db.exists()
 
 
+def test_serve_refuses_a_path_it_cannot_create_in_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = tmp_path / "missing" / "acme.db"
+    assert main(["serve", "--db", str(db), "--siren", SIREN, "--name", NAME]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(f"error: cannot open {db}: ")
+    assert "Traceback" not in err
+    assert not tmp_path.joinpath("missing").exists()
+
+
 def _empty(path: Path) -> None:
     path.write_bytes(b"")
 
