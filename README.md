@@ -5,7 +5,7 @@ luca keeps the books of one société: écritures in journaux, in double entry, 
 It is a server. A script, a human in a chat, or a language model talks to it over HTTP or MCP on one port, sends one écriture at a time, and gets it accepted — numbered, dated, immutable — or refused with nothing written and a stable error code. Reading is raw SQL, read only.
 
 ```sh
-uv run luca serve --db acme.db --siren 123456789 --name ACME
+luca serve --db acme.db --siren 123456789 --name ACME
 ```
 
 That is the whole command line. A missing file is created with the identity of the société and nothing else; the société grows through the API.
@@ -48,7 +48,28 @@ Every response carries `societe`. A refusal is a `400` with a list of errors, ea
 
 Collecting documents, interpreting them, choosing comptes or tax treatment, holding a brouillard, reviewing, lettrage, FEC, reports, filing, authentication, a user interface. Those belong to tools built on top of luca. Acceptance means the rules passed, nothing more.
 
-## Install
+## Run
+
+The image is published on GHCR for `linux/amd64` and `linux/arm64` at every `v*` tag. It runs as uid 1000 and keeps the store under `/data`: give it a volume and publish the port.
+
+With Docker, a named volume:
+
+```sh
+docker run --rm -v luca:/data -p 8000:8000 ghcr.io/cordo-capital/luca --db /data/luca.db --siren 123456789 --name ACME
+```
+
+With Apple Containers, a host directory, because named volumes are mounted as root there:
+
+```sh
+mkdir -p data
+container run --rm -v "$PWD/data:/data" -p 8000:8000 ghcr.io/cordo-capital/luca --db /data/luca.db --siren 123456789 --name ACME
+```
+
+`--siren` and `--name` create the store on the first run. Afterwards the image's default arguments, `--db /data/luca.db`, are enough: stop after the image name.
+
+### From source
+
+For working on luca: Python 3.12 or later and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 git clone https://github.com/cordo-capital/luca
@@ -57,16 +78,7 @@ uv sync
 uv run luca serve --db acme.db --siren 123456789 --name ACME
 ```
 
-Python 3.12 or later. Runtime dependencies: the MCP Python SDK, uvicorn, and what they pull in.
-
-Or the image, published on GHCR for `linux/amd64` and `linux/arm64` at every `v*` tag, with a volume for the store and the port published:
-
-```sh
-docker run --rm -v luca:/data -p 8000:8000 ghcr.io/cordo-capital/luca --db /data/luca.db --siren 123456789 --name ACME
-mkdir -p data && container run --rm -v "$PWD/data:/data" -p 8000:8000 ghcr.io/cordo-capital/luca --db /data/luca.db --siren 123456789 --name ACME
-```
-
-`--siren` and `--name` are needed the first time only; afterwards the image's default arguments, `--db /data/luca.db`, are enough. The image runs as uid 1000, and Apple Containers mount named volumes as root: bind a host directory there.
+Runtime dependencies: the MCP Python SDK, uvicorn, and what they pull in.
 
 ## Documentation
 
