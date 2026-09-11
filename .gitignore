@@ -1,0 +1,21 @@
+# a société's store never goes in this repository; tests build their own
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# python
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# os / editors
+.DS_Store
+.idea/
+.vscode/

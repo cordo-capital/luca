@@ -1,0 +1,59 @@
+[project]
+name = "luca"
+version = "0.1.0"
+description = "luca keeps the books of one société: écritures in journaux, in double entry, on one SQLite file that only luca writes."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "Cordo Capital" }]
+keywords = ["accounting", "bookkeeping", "comptabilité", "ledger", "france", "sqlite", "mcp"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Financial and Insurance Industry",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business :: Financial :: Accounting",
+]
+dependencies = [
+  "mcp>=2.2,<3",
+  "uvicorn>=0.31",
+]
+
+[project.urls]
+Homepage = "https://github.com/cordo-capital/luca"
+Issues = "https://github.com/cordo-capital/luca/issues"
+
+[project.scripts]
+luca = "luca.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/luca"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "httpx>=0.28",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["luca"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
