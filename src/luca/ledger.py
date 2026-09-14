@@ -1,4 +1,4 @@
-"""The write rules: /add, /compte, /journal, /exercice (docs/spec/endpoints.md).
+"""The write rules: /add, /compte, /journal, /exercice, /close (docs/spec/endpoints.md).
 
 Each handler takes the store and one parsed JSON document, checks every rule
 it can, and either writes in one immediate transaction or raises ``Refused``
@@ -13,7 +13,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -26,7 +26,6 @@ MAX_CENTIMES = 2**63 - 1  # the largest INTEGER SQLite stores
 MAX_LIGNES = 1000  # per écriture: bounds the time the write lock is held by one /add
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _AMOUNT = re.compile(r"^(\d+)(?:\.(\d{1,2}))?$")
-_ANNULE = re.compile(r"^(.+)/([1-9]\d*)$")
 
 
 class Refused(Exception):  # noqa: N818 — "raise Refused(errors)" is the sentence we want
@@ -150,7 +149,7 @@ class Document:
     piece_date: str
     lib: str
     lignes: tuple[Ligne, ...]
-    annule: tuple[str, int] | None  # (journal, num) of the écriture cancelled
+    annule: int | None  # the id of the écriture cancelled
 
 
 _DOCUMENT_KEYS = {"request_id", "journal", "date", "piece", "lib", "lignes", "annule"}
@@ -200,12 +199,11 @@ def parse_document(raw: Any) -> Document:
                 lignes.append(ligne)
     annule = None
     if "annule" in raw:
-        reference = text(raw, "annule", "", errors)
-        match = _ANNULE.match(reference) if reference is not None else None
-        if reference is not None and match is None:
-            _shape(errors, f"annule: {reference!r} is not <journal>/<num>")
-        elif match is not None:
-            annule = (match.group(1), int(match.group(2)))
+        value = raw["annule"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            _shape(errors, "annule: not the id of an écriture, a positive integer")
+        else:
+            annule = value
     if errors:
         raise Refused(errors)
     debits = sum(ligne.debit for ligne in lignes)
@@ -244,7 +242,7 @@ def canonical(document: Document) -> bytes:
         "lignes": lignes,
     }
     if document.annule is not None:
-        content["annule"] = f"{document.annule[0]}/{document.annule[1]}"
+        content["annule"] = document.annule
     return json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
@@ -253,8 +251,8 @@ def ecriture_json(conn: sqlite3.Connection, ecriture_id: int) -> dict[str, Any]:
     row = conn.execute(
         """
         SELECT e.id, e.journal_code, e.num, e.date, e.piece_ref, e.piece_date, e.lib,
-               e.valid_date, e.request_id, a.journal_code, a.num
-        FROM ecriture e LEFT JOIN ecriture a ON a.id = e.annule_id
+               e.valid_date, e.request_id, e.annule_id, x.date_start, x.date_end
+        FROM ecriture e JOIN exercice x ON x.id = e.exercice_id
         WHERE e.id = ?
         """,
         (ecriture_id,),
@@ -274,14 +272,24 @@ def ecriture_json(conn: sqlite3.Connection, ecriture_id: int) -> dict[str, Any]:
         "id": row[0],
         "journal": row[1],
         "num": row[2],
+        "exercice": {"date_start": row[10], "date_end": row[11]},
         "date": row[3],
         "piece": {"ref": row[4], "date": row[5]},
         "lib": row[6],
         "valid_date": row[7],
         "request_id": row[8],
-        "annule": f"{row[9]}/{row[10]}" if row[9] is not None else None,
+        "annule": row[9],
         "lignes": lignes,
     }
+
+
+def _exercice_json(row: tuple[Any, ...]) -> dict[str, Any]:
+    """An exercice as /exercice and /close return it: ``(date_start, date_end, closed)``."""
+    return {"date_start": row[0], "date_end": row[1], "closed": bool(row[2])}
+
+
+def _span(row: tuple[Any, ...]) -> str:
+    return f"{row[0]} → {row[1]}"
 
 
 def _inverse(new: tuple[Ligne, ...], original: list[tuple[str, int, int]]) -> bool:
@@ -310,8 +318,8 @@ def add(store: Store, raw: Any) -> dict[str, Any]:
                     ecriture=ecriture_json(conn, previous[0]),
                 )
             )
-        exercice = conn.execute("SELECT date_start, date_end FROM exercice").fetchone()
-        if exercice is None:
+        exercice = None
+        if conn.execute("SELECT 1 FROM exercice").fetchone() is None:
             errors.append(
                 error(
                     "NO_EXERCICE",
@@ -319,13 +327,31 @@ def add(store: Store, raw: Any) -> dict[str, Any]:
                     " then add journaux with POST /journal and comptes with POST /compte",
                 )
             )
-        elif not exercice[0] <= document.date <= exercice[1]:
-            errors.append(
-                error(
-                    "DATE_OUTSIDE_EXERCICE",
-                    f"date {document.date} is outside the exercice {exercice[0]} → {exercice[1]}",
+        else:
+            exercice = conn.execute(
+                "SELECT id, date_start, date_end, closed FROM exercice"
+                " WHERE date_start <= ? AND ? <= date_end",
+                (document.date, document.date),
+            ).fetchone()
+            if exercice is None:
+                open_ = conn.execute(
+                    "SELECT date_start, date_end FROM exercice WHERE closed = 0 ORDER BY date_start"
+                ).fetchall()
+                errors.append(
+                    error(
+                        "DATE_OUTSIDE_EXERCICE",
+                        f"date {document.date} is in no exercice; open:"
+                        f" {', '.join(_span(x) for x in open_) or 'none'}",
+                    )
                 )
-            )
+            elif exercice[3]:
+                errors.append(
+                    error(
+                        "EXERCICE_CLOSED",
+                        f"date {document.date} is in the exercice {_span(exercice[1:])},"
+                        " which is closed",
+                    )
+                )
         if (
             conn.execute("SELECT 1 FROM journal WHERE code = ?", (document.journal,)).fetchone()
             is None
@@ -341,23 +367,20 @@ def add(store: Store, raw: Any) -> dict[str, Any]:
                 )
         annule_id = None
         if document.annule is not None:
-            reference = f"{document.annule[0]}/{document.annule[1]}"
-            target = conn.execute(
-                "SELECT id FROM ecriture WHERE journal_code = ? AND num = ?", document.annule
-            ).fetchone()
+            reference = document.annule
+            target = conn.execute("SELECT id FROM ecriture WHERE id = ?", (reference,)).fetchone()
             if target is None:
                 errors.append(error("ANNULE_NOT_FOUND", f"annule {reference}: no such écriture"))
             else:
-                annule_id = int(target[0])
+                annule_id = reference
                 cancelled_by = conn.execute(
-                    "SELECT journal_code, num FROM ecriture WHERE annule_id = ?", (annule_id,)
+                    "SELECT id FROM ecriture WHERE annule_id = ?", (annule_id,)
                 ).fetchone()
                 if cancelled_by is not None:
                     errors.append(
                         error(
                             "ANNULE_ALREADY_USED",
-                            f"annule {reference}: already cancelled by"
-                            f" {cancelled_by[0]}/{cancelled_by[1]}",
+                            f"annule {reference}: already cancelled by écriture {cancelled_by[0]}",
                         )
                     )
                 original = conn.execute(
@@ -373,18 +396,21 @@ def add(store: Store, raw: Any) -> dict[str, Any]:
                     )
         if errors:
             raise Refused(errors)
+        assert exercice is not None
 
         num = conn.execute(
-            "SELECT coalesce(max(num), 0) + 1 FROM ecriture WHERE journal_code = ?",
-            (document.journal,),
+            "SELECT coalesce(max(num), 0) + 1 FROM ecriture"
+            " WHERE exercice_id = ? AND journal_code = ?",
+            (exercice[0], document.journal),
         ).fetchone()[0]
         ecriture_id = conn.execute(
             """
-            INSERT INTO ecriture (journal_code, num, date, piece_ref, piece_date, lib,
-                                  valid_date, request_id, request_hash, annule_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+            INSERT INTO ecriture (exercice_id, journal_code, num, date, piece_ref, piece_date,
+                                  lib, valid_date, request_id, request_hash, annule_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
             """,
             (
+                exercice[0],
                 document.journal,
                 num,
                 document.date,
@@ -408,7 +434,7 @@ def add(store: Store, raw: Any) -> dict[str, Any]:
         return {"replay": False, "ecriture": ecriture_json(conn, ecriture_id)}
 
 
-# --- /compte, /journal, /exercice ------------------------------------------------
+# --- /compte, /journal, /exercice, /close ---------------------------------------
 
 
 def add_compte(store: Store, raw: Any) -> dict[str, Any]:
@@ -454,7 +480,7 @@ def add_journal(store: Store, raw: Any) -> dict[str, Any]:
 
 
 def open_exercice(store: Store, raw: Any) -> dict[str, Any]:
-    """Open the single exercice ``[date_start, date_end]``. Refuses a second one."""
+    """Open the next exercice ``[date_start, date_end]``, the day after the last one ends."""
     errors: list[Error] = []
     keys = {"date_start", "date_end"}
     if not check_object(raw, "", keys, keys, errors):
@@ -466,17 +492,55 @@ def open_exercice(store: Store, raw: Any) -> dict[str, Any]:
     if end < start:
         errors.append(error("INVALID_EXERCICE", f"date_end {end} is before date_start {start}"))
     with store.write() as conn:
-        existing = conn.execute("SELECT date_start, date_end FROM exercice").fetchone()
-        if existing is not None:
+        last = conn.execute(
+            "SELECT date_start, date_end FROM exercice ORDER BY date_end DESC LIMIT 1"
+        ).fetchone()
+        if last is not None:
+            expected = (parse_date(last[1]) + timedelta(days=1)).isoformat()
+            if start != expected:
+                errors.append(
+                    error(
+                        "EXERCICE_NOT_CONTIGUOUS",
+                        f"date_start {start} is not the day after the last exercice"
+                        f" {_span(last)}: expected {expected}",
+                    )
+                )
+        if errors:
+            raise Refused(errors)
+        conn.execute("INSERT INTO exercice (date_start, date_end) VALUES (?, ?)", (start, end))
+    return {"exercice": _exercice_json((start, end, 0))}
+
+
+def close_exercice(store: Store, raw: Any) -> dict[str, Any]:
+    """Close the exercice ending on ``date_end``, for good. Oldest open first."""
+    errors: list[Error] = []
+    if not check_object(raw, "", {"date_end"}, {"date_end"}, errors):
+        raise Refused(errors)
+    end = day(raw, "date_end", "", errors)
+    if errors or end is None:
+        raise Refused(errors)
+    with store.write() as conn:
+        exercice = conn.execute(
+            "SELECT id, date_start, date_end, closed FROM exercice WHERE date_end = ?", (end,)
+        ).fetchone()
+        if exercice is None:
+            raise Refused([error("EXERCICE_NOT_FOUND", f"no exercice ends on {end}")])
+        if exercice[3]:
+            errors.append(
+                error("EXERCICE_CLOSED", f"the exercice {_span(exercice[1:])} is already closed")
+            )
+        older = conn.execute(
+            "SELECT date_start, date_end FROM exercice WHERE closed = 0 AND date_end < ?"
+            " ORDER BY date_end LIMIT 1",
+            (end,),
+        ).fetchone()
+        if older is not None:
             errors.append(
                 error(
-                    "EXERCICE_EXISTS",
-                    f"an exercice already exists: {existing[0]} → {existing[1]}",
+                    "EXERCICE_ORDER", f"the exercice {_span(older)} is still open: close it first"
                 )
             )
         if errors:
             raise Refused(errors)
-        conn.execute(
-            "INSERT INTO exercice (id, date_start, date_end) VALUES (1, ?, ?)", (start, end)
-        )
-    return {"exercice": {"date_start": start, "date_end": end}}
+        conn.execute("UPDATE exercice SET closed = 1 WHERE id = ?", (exercice[0],))
+    return {"exercice": _exercice_json((exercice[1], exercice[2], 1))}

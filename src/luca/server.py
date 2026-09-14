@@ -1,6 +1,6 @@
 """HTTP routes and MCP tools: the same handlers, the same errors (docs/spec/endpoints.md).
 
-``build`` returns the ASGI application of one société: five routes, five
+``build`` returns the ASGI application of one société: six routes, six
 tools on ``/mcp``, and the identity of the société everywhere a client can
 see it. The MCP SDK validates nothing: a tool's arguments reach the handler
 as they came, and the handler refuses them exactly as it refuses a request
@@ -91,7 +91,9 @@ def _summary(result: dict[str, Any]) -> str:
     if "journal" in result:
         return f"added {result['journal']['code']}"
     if "exercice" in result:
-        return f"opened {result['exercice']['date_start']} → {result['exercice']['date_end']}"
+        exercice = result["exercice"]
+        verb = "closed" if exercice["closed"] else "opened"
+        return f"{verb} {exercice['date_start']} → {exercice['date_end']}"
     return f"ok rows={len(result['rows'])}" + (" truncated" if result["truncated"] else "")
 
 
@@ -129,7 +131,7 @@ def handle(
     return status, body
 
 
-# --- the five endpoints ----------------------------------------------------------
+# --- the six endpoints -----------------------------------------------------------
 # The JSON schemas describe the documents to clients; the handlers enforce them.
 
 _AMOUNT = {
@@ -161,12 +163,15 @@ class Endpoint:
     schema: dict[str, Any]
 
 
-def _hints(*, read_only: bool = False, idempotent: bool = False) -> ToolAnnotations:
-    """What a client may assume: nothing is ever modified or deleted, nothing is reached
-    beyond the store; a repeat of luca_add is a replay, a repeat of the others a refusal."""
+def _hints(
+    *, read_only: bool = False, idempotent: bool = False, destructive: bool = False
+) -> ToolAnnotations:
+    """What a client may assume: nothing is ever modified or deleted, and nothing is reached
+    beyond the store. A repeat of luca_add is a replay, a repeat of the others a refusal.
+    Closing an exercice is the one irreversible act, the one a client may want to confirm."""
     return ToolAnnotations(
         read_only_hint=read_only,
-        destructive_hint=False,
+        destructive_hint=destructive,
         idempotent_hint=idempotent,
         open_world_hint=False,
     )
@@ -181,8 +186,9 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         _hints(idempotent=True),
         "record one écriture in the books, in double entry. Accepted whole — numbered, dated,"
         " immutable — or refused with nothing written and one error code per rule broken."
-        " Same request_id and same content replays the original result. Optional annule"
-        " '<journal>/<num>' cancels an écriture with its exact inverse.",
+        " Same request_id and same content replays the original result. Optional annule,"
+        " the id of an écriture, cancels it with its exact inverse — the only correction, and"
+        " the way to correct a closed exercice from an open one.",
         _object(
             {
                 "request_id": {
@@ -209,9 +215,9 @@ ENDPOINTS: tuple[Endpoint, ...] = (
                     ),
                 },
                 "annule": {
-                    "type": "string",
-                    "pattern": r"^.+/[1-9][0-9]*$",
-                    "description": "'<journal>/<num>' of the écriture this one cancels",
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The id of the écriture this one cancels",
                 },
             },
             ["request_id", "journal", "date", "piece", "lib", "lignes"],
@@ -224,9 +230,10 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         "read the books",
         _hints(read_only=True, idempotent=True),
         "read the books with one SQL statement on a read-only connection. Tables: societe,"
-        " exercice, journal, compte, ecriture (journal_code, num, date, piece_ref, piece_date,"
-        " lib, valid_date, request_id, annule_id), ligne (ecriture_id, idx, compte, lib, debit,"
-        " credit). Amounts are integer centimes. `SELECT name, sql FROM sqlite_master` gives"
+        " exercice (id, date_start, date_end, closed), journal, compte, ecriture (id,"
+        " exercice_id, journal_code, num, date, piece_ref, piece_date, lib, valid_date,"
+        " request_id, annule_id), ligne (ecriture_id, idx, compte, lib, debit, credit)."
+        " Amounts are integer centimes. `SELECT name, sql FROM sqlite_master` gives"
         " the schema. Values go in params, bound to the ? of the statement. At most 1000 rows.",
         _object(
             {
@@ -270,11 +277,26 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         "luca_open_exercice",
         "/exercice",
         ledger.open_exercice,
-        "open the exercice",
+        "open the next exercice",
         _hints(),
-        "open the exercice [date_start, date_end]. One per société; luca_add accepts only"
-        " dates inside it. Refuses a second exercice.",
+        "open the next exercice [date_start, date_end]: the first is free, the next starts"
+        " the day after the last one ends. Several may be open at once; luca_add accepts"
+        " only dates inside an open one.",
         _object({"date_start": _DATE, "date_end": _DATE}, ["date_start", "date_end"]),
+    ),
+    Endpoint(
+        "luca_close_exercice",
+        "/close",
+        ledger.close_exercice,
+        "close an exercice",
+        _hints(destructive=True),
+        "close the exercice ending on date_end, for good: no écriture is accepted in it"
+        " afterwards, and a mistake in it is corrected by an inverse écriture (annule) dated in"
+        " an open exercice. Oldest open exercice first.",
+        _object(
+            {"date_end": {**_DATE, "description": "The last day of the exercice to close"}},
+            ["date_end"],
+        ),
     ),
 )
 
@@ -341,8 +363,10 @@ def build(store: Store) -> Starlette:
         version=__version__,
         instructions=(
             f"luca keeps the books of {who}: écritures in journaux, in double entry,"
-            " one exercice. A société starts empty: open the exercice, add journaux and"
-            " comptes, then add écritures. Read anything with luca_query."
+            " exercice after exercice. A société starts empty: open the first exercice, add"
+            " journaux and comptes, then add écritures. Open the next exercice when the year"
+            " turns, close an exercice once its books are done, for good. Read anything with"
+            " luca_query."
         ),
         on_list_tools=list_tools,
         on_call_tool=call_tool,

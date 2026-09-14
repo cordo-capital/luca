@@ -9,11 +9,12 @@ French regulatory terms are identifiers in luca: they name tables, columns, JSON
 | **ligne** | One line of an écriture: one compte, one debit or one credit. | posting |
 | **journal** | A book in which écritures are numbered sequentially; identified by its code, e.g. `AC` purchases, `VE` sales, `BQ` bank, `OD` miscellaneous. | journal / daybook |
 | **partie double** | Every écriture debits and credits equal amounts. | double entry |
-| **EcritureNum** | Entry number, unbroken sequence within a journal, assigned when the écriture is accepted. `num` in the store. Distinct from luca's technical `id`. | entry number |
+| **EcritureNum** | Entry number, unbroken sequence within a journal and an exercice, assigned when the écriture is accepted. `num` in the store. Distinct from luca's technical `id`, which is what `annule` names. | entry number |
 | **ValidDate** | Day on which an écriture became definitive. In luca, the day of acceptance in Europe/Paris. `valid_date` in the store. | posting date |
 | **validation** | The act that makes an écriture definitive and assigns its number. In luca it is acceptance itself. | posting (in the definitive sense) |
 | **brouillard** | Provisional entries not yet validated, in most packages. luca has none. | draft journal |
-| **exercice** | Fiscal year, from `date_start` to `date_end`. One per file. | fiscal year |
+| **exercice** | Fiscal year, from `date_start` to `date_end`. A file holds every exercice of its société, contiguous; an exercice is open until closed. | fiscal year |
+| **clôture** | Closing an exercice: from then on no écriture is accepted in it, ever; `POST /close`. Not to be confused with the *date de clôture*, the last day of the exercice, `date_end`. | year-end close |
 | **plan comptable** | The chart of accounts: the comptes an écriture may use. In luca, exactly the comptes added through `/compte`. | chart of accounts |
 | **compte** | An account of the plan comptable, identified by its `numero`. | account |
 | **pièce** | The supporting document of an écriture: `piece.ref`, `piece.date`. | voucher / source document |

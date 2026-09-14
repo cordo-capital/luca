@@ -8,10 +8,13 @@ CREATE TABLE societe (
     name  TEXT    NOT NULL CHECK (name <> '')
 ) STRICT;
 
+-- Every exercice of the société, contiguous: each starts the day after the last ends.
+-- Contiguity is the server's rule, checked under the write lock like balance.
 CREATE TABLE exercice (
-    id         INTEGER PRIMARY KEY CHECK (id = 1),  -- one exercice per file
-    date_start TEXT NOT NULL CHECK (date_start GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
-    date_end   TEXT NOT NULL CHECK (date_end GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    id         INTEGER PRIMARY KEY,                      -- in opening order
+    date_start TEXT    NOT NULL UNIQUE CHECK (date_start GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    date_end   TEXT    NOT NULL UNIQUE CHECK (date_end GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    closed     INTEGER NOT NULL DEFAULT 0 CHECK (closed IN (0, 1)),  -- 1 once closed, for good
     CHECK (date_start <= date_end)
 ) STRICT;
 
@@ -26,9 +29,10 @@ CREATE TABLE compte (
 ) STRICT;
 
 CREATE TABLE ecriture (
-    id           INTEGER PRIMARY KEY,                    -- technical, stable, never reused
+    id           INTEGER PRIMARY KEY,                    -- technical, stable, never reused: what annule names
+    exercice_id  INTEGER NOT NULL REFERENCES exercice (id),  -- the exercice holding `date`
     journal_code TEXT    NOT NULL REFERENCES journal (code),
-    num          INTEGER NOT NULL CHECK (num >= 1),      -- EcritureNum: continuous per journal
+    num          INTEGER NOT NULL CHECK (num >= 1),      -- EcritureNum: continuous per journal and exercice
     date         TEXT    NOT NULL CHECK (date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     piece_ref    TEXT    NOT NULL CHECK (piece_ref <> ''),
     piece_date   TEXT    NOT NULL CHECK (piece_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
@@ -37,7 +41,7 @@ CREATE TABLE ecriture (
     request_id   TEXT    NOT NULL UNIQUE CHECK (request_id <> ''),   -- chosen by the caller
     request_hash TEXT    NOT NULL CHECK (length(request_hash) = 64), -- SHA-256 of the canonical content
     annule_id    INTEGER UNIQUE REFERENCES ecriture (id),            -- the écriture this one cancels
-    UNIQUE (journal_code, num)
+    UNIQUE (exercice_id, journal_code, num)
 ) STRICT;
 
 CREATE TABLE ligne (
@@ -64,3 +68,12 @@ BEGIN SELECT RAISE(ABORT, 'ligne is immutable'); END;
 
 CREATE TRIGGER ligne_no_delete BEFORE DELETE ON ligne
 BEGIN SELECT RAISE(ABORT, 'ligne is immutable'); END;
+
+-- An exercice is never deleted, its dates never change, and once closed it stays closed.
+CREATE TRIGGER exercice_no_delete BEFORE DELETE ON exercice
+BEGIN SELECT RAISE(ABORT, 'exercice is immutable'); END;
+
+CREATE TRIGGER exercice_no_update BEFORE UPDATE ON exercice
+WHEN NEW.id <> OLD.id OR NEW.date_start <> OLD.date_start OR NEW.date_end <> OLD.date_end
+     OR (OLD.closed = 1 AND NEW.closed = 0)
+BEGIN SELECT RAISE(ABORT, 'exercice is immutable but for closing it'); END;

@@ -9,7 +9,7 @@ luca's clients are programs and prompts. A renamed tool breaks every script and 
 
 ## Decision
 
-The five names are fixed once and never renamed: `luca_add`, `luca_query`, `luca_add_compte`, `luca_add_journal`, `luca_open_exercice`, and their routes `/add`, `/query`, `/compte`, `/journal`, `/exercice`. Error codes are part of the same contract: a code, once shipped, keeps its meaning. Messages may change.
+The six names are fixed once and never renamed: `luca_add`, `luca_query`, `luca_add_compte`, `luca_add_journal`, `luca_open_exercice`, `luca_close_exercice`, and their routes `/add`, `/query`, `/compte`, `/journal`, `/exercice`, `/close`. Error codes are part of the same contract: a code, once shipped, keeps its meaning. Messages may change.
 
 The `luca_` prefix is there because a client may see tools from several servers at once.
 
