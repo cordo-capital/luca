@@ -29,3 +29,16 @@ jobs:
         run: |
           docker run --rm luca --help | grep -q -- "--db"
           test "$(docker run --rm --entrypoint id luca -u)" != 0
+      - name: luca serve answers /query inside the image, logs one line, stops on docker stop
+        run: |
+          docker run -d --name luca -p 8000:8000 luca --db /data/luca.db --siren 123456789 --name ACME
+          for i in $(seq 40); do
+            curl -sf localhost:8000/query -d '{"sql":"SELECT 1"}' >/dev/null && break
+            sleep 0.25
+          done
+          curl -s localhost:8000/query -d '{"sql":"SELECT 1"}' | tee /dev/stderr | grep -q '"rows":\[\[1\]\]'
+          docker stop luca
+          docker logs luca 2>/dev/null | grep -q "^POST /query client=- ok rows=1$"
+          ! docker logs luca 2>&1 | grep -q "Traceback"
+          test "$(docker cp luca:/data - | tar -t | grep -c luca.db)" = 1
+          docker rm luca

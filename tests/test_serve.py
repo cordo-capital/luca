@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import signal
+import socket
 import sqlite3
+import subprocess
+import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -14,7 +19,7 @@ from luca import store as luca_store
 from luca.cli import main, open_store
 from luca.store import APPLICATION_ID, Store, StoreError
 
-from .conftest import NAME, SIREN, serving
+from .conftest import NAME, SIREN, SOCIETE, serving
 
 # --- the command ----------------------------------------------------------------
 
@@ -109,6 +114,51 @@ def test_serve_refuses_an_identity_that_does_not_match(
     assert "SIREN 123456789, not 987654321" in capsys.readouterr().err
     assert main(["serve", "--db", str(db), "--name", "OTHER"]) == 1
     assert "'ACME', not 'OTHER'" in capsys.readouterr().err
+
+
+def test_serve_as_a_process_answers_logs_one_line_and_stops_on_sigterm(tmp_path: Path) -> None:
+    """The command itself: creates the store, listens on the port, one line per request on
+    stdout and nothing else there, no traceback on stderr, and after SIGTERM one whole file."""
+    db = tmp_path / "acme.db"
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    command = [sys.executable, "-m", "luca.cli", "serve", "--db", str(db), "--port", str(port)]
+    process = subprocess.Popen(
+        [*command, "--siren", SIREN, "--name", NAME],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while True:
+            try:
+                response = httpx.post(f"http://127.0.0.1:{port}/query", json={"sql": "SELECT 1"})
+                break
+            except httpx.ConnectError:
+                if process.poll() is not None:
+                    _, err = process.communicate()
+                    pytest.fail(f"luca serve exited {process.returncode}: {err}")
+                assert time.monotonic() < deadline, "luca serve did not answer in time"
+                time.sleep(0.05)
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "societe": SOCIETE,
+            "columns": ["1"],
+            "rows": [[1]],
+            "truncated": False,
+        }
+    finally:
+        process.send_signal(signal.SIGTERM)
+        out, err = process.communicate(timeout=20)
+    assert process.returncode == -signal.SIGTERM
+    assert out == "POST /query client=- ok rows=1\n"
+    assert "Traceback" not in err
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["acme.db"]
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT siren, name FROM societe").fetchone() == (SIREN, NAME)
+    conn.close()
 
 
 def test_stopping_the_server_closes_the_store_and_leaves_one_whole_file(tmp_path: Path) -> None:
