@@ -50,7 +50,7 @@ Collecting documents, interpreting them, choosing comptes or tax treatment, hold
 
 ## Run
 
-The image is published on GHCR for `linux/amd64` and `linux/arm64` at every `v*` tag. It runs as uid 1000 and keeps the store under `/data`: give it a volume and publish the port.
+The image is published on GHCR for `linux/amd64` and `linux/arm64` at every `v*` tag, once CI is green on it; it holds the dependencies exactly as `uv.lock` pins them. It runs as uid 1000 and keeps the store under `/data`: give it a volume and publish the port.
 
 With Docker, a named volume:
 
