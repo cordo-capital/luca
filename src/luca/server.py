@@ -203,8 +203,18 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         " exercice, journal, compte, ecriture (journal_code, num, date, piece_ref, piece_date,"
         " lib, valid_date, request_id, annule_id), ligne (ecriture_id, idx, compte, lib, debit,"
         " credit). Amounts are integer centimes. `SELECT name, sql FROM sqlite_master` gives"
-        " the schema. At most 1000 rows.",
-        _object({"sql": {"type": "string", "description": "One SQL statement"}}, ["sql"]),
+        " the schema. Values go in params, bound to the ? of the statement. At most 1000 rows.",
+        _object(
+            {
+                "sql": {"type": "string", "description": "One SQL statement, ? for each value"},
+                "params": {
+                    "type": "array",
+                    "items": {"type": ["string", "integer", "null"]},
+                    "description": "The values bound to the ?, in order; never a float",
+                },
+            },
+            ["sql"],
+        ),
     ),
     Endpoint(
         "luca_add_compte",

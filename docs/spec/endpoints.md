@@ -5,7 +5,7 @@ luca is one server on one port, reachable two ways with the same handlers and th
 | MCP tool | Route | Effect |
 |---|---|---|
 | `luca_add` | `POST /add` | one écriture, accepted or refused in one transaction |
-| `luca_query` | `POST /query` | raw SQL, read only, rows as JSON ([query.md](query.md)) |
+| `luca_query` | `POST /query` | raw SQL with bound `params`, read only, rows as JSON ([query.md](query.md)) |
 | `luca_add_compte` | `POST /compte` | adds a compte; refuses a duplicate |
 | `luca_add_journal` | `POST /journal` | adds a journal; refuses a duplicate |
 | `luca_open_exercice` | `POST /exercice` | opens the single exercice; refuses if one exists |
