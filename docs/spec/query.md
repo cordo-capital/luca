@@ -5,7 +5,8 @@ luca has no read endpoint per subject — no balance, no grand livre, no list of
 ## Request and response
 
 ```json
-{"sql": "SELECT journal_code, num, date, lib FROM ecriture ORDER BY valid_date, id"}
+{"sql": "SELECT journal_code, num, date, lib FROM ecriture WHERE journal_code = ? AND date >= ? ORDER BY valid_date, id",
+ "params": ["VE", "2025-06-01"]}
 ```
 
 ```json
@@ -17,7 +18,9 @@ luca has no read endpoint per subject — no balance, no grand livre, no list of
 }
 ```
 
-One statement per request. Rows are arrays in column order; values are JSON numbers, strings or `null`; a blob comes back as lowercase hex. At most 1000 rows are returned; `truncated` is true when the statement produced more.
+One statement per request. `params` is optional: the values bound to the `?` placeholders of the statement, in order — each a string, an integer or `null`, never a float or a boolean. A value that comes from outside — a pièce reference, a label to look up — belongs in `params`, not in the SQL text. Binding is SQLite's own; the statement text is still never inspected.
+
+Rows are arrays in column order; values are JSON numbers, strings or `null`; a blob comes back as lowercase hex. At most 1000 rows are returned; `truncated` is true when the statement produced more.
 
 Amounts in the store are integer centimes, and `/query` returns them as such. Presenting them in euros is the client's job.
 
@@ -39,10 +42,10 @@ A progress handler counts virtual-machine opcodes and interrupts the statement p
 
 | Code | When |
 |---|---|
-| `INVALID_SHAPE` | `sql` missing or not a string |
+| `INVALID_SHAPE` | `sql` missing or not a string; `params` not an array, or a value in it that is not a string, an integer or `null`; the message names the index |
 | `SQL_DENIED` | the authorizer refused an action |
 | `SQL_BUDGET` | the opcode budget was exceeded |
-| `SQL_ERROR` | any other SQLite error — a syntax error, an unknown table, two statements in one request; the message is SQLite's, unchanged |
+| `SQL_ERROR` | any other SQLite error — a syntax error, an unknown table, two statements in one request, more or fewer `?` than values in `params`; the message is SQLite's, unchanged |
 
 ## Examples
 
@@ -56,8 +59,8 @@ SELECT name, sql FROM sqlite_master WHERE type = 'table'
 -- balance per compte, in centimes
 SELECT compte, sum(debit) - sum(credit) AS solde FROM ligne GROUP BY compte ORDER BY compte
 
--- an écriture with its lignes
+-- an écriture with its lignes, with params ["VE", 1]
 SELECT e.journal_code, e.num, e.date, e.lib, l.idx, l.compte, l.debit, l.credit
 FROM ecriture e JOIN ligne l ON l.ecriture_id = e.id
-WHERE e.journal_code = 'VE' AND e.num = 1 ORDER BY l.idx
+WHERE e.journal_code = ? AND e.num = ? ORDER BY l.idx
 ```

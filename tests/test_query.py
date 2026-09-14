@@ -26,6 +26,42 @@ def test_query_returns_columns_and_rows(books: httpx.Client) -> None:
     }
 
 
+def test_query_binds_params_to_the_placeholders(books: httpx.Client) -> None:
+    books.post("/add", json=document())
+    sql = "SELECT num, lib FROM ecriture WHERE journal_code = ? AND num >= ? AND ? IS NULL"
+    response = books.post("/query", json={"sql": sql, "params": ["VE", 1, None]})
+    assert response.status_code == 200, response.text
+    assert response.json()["rows"] == [[1, "Facture F2025-001"]]
+    response = books.post("/query", json={"sql": sql, "params": ["AC", 1, None]})
+    assert response.json()["rows"] == []
+
+
+@pytest.mark.parametrize(
+    ("params", "reason"),
+    [
+        ("VE", "params: not a JSON array"),
+        ({"a": "VE"}, "params: not a JSON array"),
+        ([1.5], "params[0]: not a string, an integer or null"),
+        ([True], "params[0]: not a string, an integer or null"),
+        ([["VE"]], "params[0]: not a string, an integer or null"),
+        ([2**63], "params[0]: 9223372036854775808 does not fit a SQLite integer"),
+        (["VE", -(2**63) - 1], "params[1]: -9223372036854775809 does not fit a SQLite integer"),
+    ],
+)
+def test_query_refuses_params_that_are_not_scalars(
+    http: httpx.Client, params: Any, reason: str
+) -> None:
+    response = http.post("/query", json={"sql": "SELECT ?", "params": params})
+    assert codes(response) == ["INVALID_SHAPE"]
+    assert messages(response) == [reason]
+
+
+def test_query_reports_a_wrong_number_of_params_as_sqlite_does(http: httpx.Client) -> None:
+    response = http.post("/query", json={"sql": "SELECT ?, ?", "params": ["VE"]})
+    assert codes(response) == ["SQL_ERROR"]
+    assert "bindings" in messages(response)[0]
+
+
 def test_query_reads_the_schema_version_and_the_schema(http: httpx.Client) -> None:
     assert rows(http, "PRAGMA user_version") == [[1]]
     assert rows(http, "SELECT * FROM pragma_application_id") == [[0x4C554341]]
@@ -109,7 +145,7 @@ def test_query_interrupts_a_statement_over_budget(http: httpx.Client) -> None:
         ({}, "sql: missing"),
         ({"sql": ""}, "sql: not a non-empty string"),
         ({"sql": 1}, "sql: not a non-empty string"),
-        ({"sql": "SELECT 1", "params": []}, "params: unknown key"),
+        ({"sql": "SELECT 1", "limit": 10}, "limit: unknown key"),
     ],
 )
 def test_query_refuses_a_malformed_document(

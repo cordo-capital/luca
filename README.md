@@ -15,7 +15,7 @@ That is the whole command line. A missing file is created with the identity of t
 | MCP tool | Route | Effect |
 |---|---|---|
 | `luca_add` | `POST /add` | one écriture, accepted or refused in one transaction |
-| `luca_query` | `POST /query` | raw SQL, read only, rows as JSON |
+| `luca_query` | `POST /query` | raw SQL with bound `params`, read only, rows as JSON |
 | `luca_add_compte` | `POST /compte` | adds a compte; refuses a duplicate |
 | `luca_add_journal` | `POST /journal` | adds a journal; refuses a duplicate |
 | `luca_open_exercice` | `POST /exercice` | opens the single exercice; refuses if one exists |
@@ -30,7 +30,7 @@ curl -s localhost:8000/compte   -d '{"numero":"706000","lib":"Prestations"}'
 curl -s localhost:8000/add -d '{"request_id":"F2025-001","journal":"VE","date":"2025-01-15",
   "piece":{"ref":"F2025-001","date":"2025-01-15"},"lib":"Facture F2025-001",
   "lignes":[{"compte":"411000","debit":"1200.00"},{"compte":"706000","credit":"1200.00"}]}'
-curl -s localhost:8000/query -d '{"sql":"SELECT journal_code, num, lib FROM ecriture"}'
+curl -s localhost:8000/query -d '{"sql":"SELECT num, lib FROM ecriture WHERE journal_code = ?","params":["VE"]}'
 ```
 
 Every response carries `societe`. A refusal is a `400` with a list of errors, each with a stable `code`; luca's own failure is a `500` with the single code `INTERNAL_ERROR` and nothing written. The first error every new société meets is `NO_EXERCICE`.
