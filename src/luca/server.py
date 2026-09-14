@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -346,7 +347,7 @@ def build(store: Store) -> Starlette:
         on_list_tools=list_tools,
         on_call_tool=call_tool,
     )
-    return server.streamable_http_app(
+    app = server.streamable_http_app(
         streamable_http_path="/mcp",
         json_response=True,
         stateless_http=True,
@@ -354,3 +355,20 @@ def build(store: Store) -> Starlette:
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         custom_starlette_routes=[route(endpoint) for endpoint in ENDPOINTS],
     )
+
+    # The store lives as long as the application. On shutdown — a signal, a stop — it is
+    # closed here, inside the ASGI lifespan, because uvicorn re-raises the signal
+    # afterwards and nothing after `uvicorn.run` gets to run: the WAL is checkpointed
+    # into the file, which is then whole and alone (docs/spec/startup.md).
+    sessions = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        async with sessions(app):
+            try:
+                yield
+            finally:
+                store.close()
+
+    app.router.lifespan_context = lifespan
+    return app

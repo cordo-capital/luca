@@ -6,6 +6,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -31,9 +32,9 @@ def store(tmp_path: Path) -> Iterator[Store]:
     s.close()
 
 
-@pytest.fixture
-def url(store: Store) -> Iterator[str]:
-    """A luca server on that store, on a free port."""
+@contextmanager
+def serving(store: Store) -> Iterator[str]:
+    """A luca server on that store, on a free port, until the block ends."""
     config = uvicorn.Config(
         server.build(store), host="127.0.0.1", port=0, log_level="warning", access_log=False
     )
@@ -50,6 +51,12 @@ def url(store: Store) -> Iterator[str]:
     finally:
         srv.should_exit = True
         thread.join(5)
+
+
+@pytest.fixture
+def url(store: Store) -> Iterator[str]:
+    with serving(store) as url:
+        yield url
 
 
 @pytest.fixture
