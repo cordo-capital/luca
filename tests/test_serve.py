@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
+import httpx
 import pytest
 
 from luca import __version__
@@ -13,7 +14,7 @@ from luca import store as luca_store
 from luca.cli import main, open_store
 from luca.store import APPLICATION_ID, Store, StoreError
 
-from .conftest import NAME, SIREN
+from .conftest import NAME, SIREN, serving
 
 # --- the command ----------------------------------------------------------------
 
@@ -108,6 +109,19 @@ def test_serve_refuses_an_identity_that_does_not_match(
     assert "SIREN 123456789, not 987654321" in capsys.readouterr().err
     assert main(["serve", "--db", str(db), "--name", "OTHER"]) == 1
     assert "'ACME', not 'OTHER'" in capsys.readouterr().err
+
+
+def test_stopping_the_server_closes_the_store_and_leaves_one_whole_file(tmp_path: Path) -> None:
+    db = tmp_path / "acme.db"
+    store = Store.create(db, siren=SIREN, name=NAME)
+    with serving(store) as url:
+        response = httpx.post(f"{url}/journal", json={"code": "VE", "lib": "Ventes"})
+        assert response.status_code == 200, response.text
+        assert (tmp_path / "acme.db-wal").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["acme.db"]
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT code, lib FROM journal").fetchall() == [("VE", "Ventes")]
+    conn.close()
 
 
 # --- the file -------------------------------------------------------------------

@@ -18,6 +18,10 @@ If `<path>` exists, `serve` checks before anything else that it is a luca store 
 
 `--siren` and `--name` are not needed to open an existing file; if given, they must match the identity in the file, else `serve` refuses. The file name means nothing; the identity is inside.
 
+## Stopping
+
+`SIGTERM` or `SIGINT` — `docker stop`, Ctrl-C — stops the server: requests in flight finish, the store is closed, and the process exits with the signal's status. Closing the store checkpoints the WAL into the file: after a stop, `<path>` is whole and alone, with no `-wal` or `-shm` next to it, and can be copied as it is ([Backup and restore](#backup-and-restore)).
+
 ## One process, one société
 
 One server is one société is one file. There is no multi-tenant mode and no switch between sociétés (ADR [0002](../decisions/0002-one-file-per-societe.md)). N sociétés are N processes on N ports, run by whatever supervises processes on the host; that lives outside luca.
