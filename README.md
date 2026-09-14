@@ -52,7 +52,7 @@ Collecting documents, interpreting them, choosing comptes or tax treatment, hold
 
 ## Run
 
-The image is published on GHCR for `linux/amd64` and `linux/arm64` at every `v*` tag, once CI is green on it; it holds the dependencies exactly as `uv.lock` pins them. It runs as uid 1000 and keeps the store under `/data`: give it a volume and publish the port.
+The image is published on GHCR for `linux/amd64` and `linux/arm64` at every version: a push to `main` that raises `__version__` in `src/luca/__init__.py` builds it once CI is green, publishes it as `:0.2.0`, `:0.2` and `:latest`, and tags the commit `v0.2.0` with a GitHub release. It holds the dependencies exactly as `uv.lock` pins them. It runs as uid 1000 and keeps the store under `/data`: give it a volume and publish the port.
 
 With Docker, a named volume:
 
