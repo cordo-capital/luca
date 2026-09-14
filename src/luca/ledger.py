@@ -23,6 +23,7 @@ Error = dict[str, Any]
 
 PARIS = ZoneInfo("Europe/Paris")
 MAX_CENTIMES = 2**63 - 1  # the largest INTEGER SQLite stores
+MAX_LIGNES = 1000  # per écriture: bounds the time the write lock is held by one /add
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _AMOUNT = re.compile(r"^(\d+)(?:\.(\d{1,2}))?$")
 _ANNULE = re.compile(r"^(.+)/([1-9]\d*)$")
@@ -189,6 +190,8 @@ def parse_document(raw: Any) -> Document:
     lignes: list[Ligne] = []
     if not isinstance(raw["lignes"], list):
         _shape(errors, "lignes: not a JSON array")
+    elif len(raw["lignes"]) > MAX_LIGNES:
+        _shape(errors, f"lignes: at most {MAX_LIGNES} lignes")
     else:
         if len(raw["lignes"]) < 2:
             _shape(errors, "lignes: at least two lignes")

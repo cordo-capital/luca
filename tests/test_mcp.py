@@ -64,6 +64,7 @@ def test_luca_add_arguments_are_the_keys_of_post_add(url: str) -> None:
     assert (
         add.input_schema["properties"]["lignes"]["items"]["properties"]["debit"]["type"] == "string"
     )
+    assert add.input_schema["properties"]["lignes"]["maxItems"] == 1000
 
 
 def test_a_societe_is_built_and_written_to_over_mcp(url: str) -> None:
