@@ -46,12 +46,17 @@ def open_store(db: Path, *, siren: str | None, name: str | None) -> Store:
 
 
 def configure_logging() -> None:
-    """luca's one line per request on stdout; everything else at WARNING on stderr."""
+    """luca's one line per request on stdout; its tracebacks, and everything else, on stderr."""
     logging.basicConfig(level=logging.WARNING)
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter("%(message)s"))
+    out = logging.StreamHandler(sys.stdout)
+    out.setFormatter(logging.Formatter("%(message)s"))
+    out.addFilter(lambda record: record.levelno < logging.ERROR)
+    err = logging.StreamHandler(sys.stderr)
+    err.setLevel(logging.ERROR)
+    err.setFormatter(logging.Formatter("%(message)s"))
     luca = logging.getLogger("luca")
-    luca.addHandler(handler)
+    luca.addHandler(out)
+    luca.addHandler(err)
     luca.setLevel(logging.INFO)
     luca.propagate = False
 

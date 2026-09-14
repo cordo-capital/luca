@@ -34,6 +34,8 @@ Each error carries a stable `code` and a human `message`. Clients branch on the 
 
 A refusal writes nothing. There is no partial acceptance.
 
+**Failure.** When luca itself fails — the disk, SQLite, a bug — the response is HTTP `500` (over MCP, `isError` true) with one error, `INTERNAL_ERROR`, whose message names the exception. Nothing was written: the transaction, if one was open, is rolled back. The traceback is on stderr. The next request is handled normally.
+
 The MCP SDK validates nothing: a tool's arguments reach the handler as they came, and the handler refuses them exactly as it refuses a request body — same codes, same messages. Calling a tool that does not exist is a JSON-RPC error (`-32602`), not a luca refusal.
 
 **Amounts** on the wire are decimal strings: `"1200.00"`. Never a JSON number, in or out.
@@ -133,7 +135,8 @@ A replay returns the same object with `replay: true`. The `ecriture` object is t
 | `SQL_DENIED` | `/query` | the statement is not a read ([query.md](query.md)) |
 | `SQL_BUDGET` | `/query` | the statement exceeded its opcode budget |
 | `SQL_ERROR` | `/query` | SQLite refused the statement; the message is SQLite's |
+| `INTERNAL_ERROR` | all | luca itself failed; the message names the exception, the traceback is on stderr; nothing was written |
 
 ## Log
 
-luca does no authentication: it trusts whoever reaches it, and a tunnel or reverse proxy in front does the rest (ADR [0003](../decisions/0003-auth-is-delegated.md)). It logs one line per request on stdout, outside the store: the route or tool, the client identity if the proxy set an `X-Forwarded-User` header (`-` otherwise), the `request_id` for `/add`, and the result — `accepted VE/1`, `replay VE/1`, `refused NO_EXERCICE,UNKNOWN_JOURNAL`, `ok rows=12`.
+luca does no authentication: it trusts whoever reaches it, and a tunnel or reverse proxy in front does the rest (ADR [0003](../decisions/0003-auth-is-delegated.md)). It logs one line per request on stdout, outside the store: the route or tool, the client identity if the proxy set an `X-Forwarded-User` header (`-` otherwise), the `request_id` for `/add`, and the result — `accepted VE/1`, `replay VE/1`, `refused NO_EXERCICE,UNKNOWN_JOURNAL`, `ok rows=12`, `failed OperationalError: disk I/O error`. Tracebacks go to stderr, never to stdout.

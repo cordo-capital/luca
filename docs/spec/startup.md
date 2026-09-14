@@ -24,7 +24,7 @@ One server is one société is one file. There is no multi-tenant mode and no sw
 
 ## Trust
 
-luca does no authentication and no authorisation: it trusts whoever reaches it (ADR [0003](../decisions/0003-auth-is-delegated.md)). Bind it to `127.0.0.1` and put a tunnel or a reverse proxy in front for anything beyond the local machine. luca does not validate the `Host` or `Origin` header either; the proxy is the boundary. It logs one line per request on stdout, with the `X-Forwarded-User` header when the proxy sets one.
+luca does no authentication and no authorisation: it trusts whoever reaches it (ADR [0003](../decisions/0003-auth-is-delegated.md)). Bind it to `127.0.0.1` and put a tunnel or a reverse proxy in front for anything beyond the local machine. luca does not validate the `Host` or `Origin` header either; the proxy is the boundary. It logs one line per request on stdout, with the `X-Forwarded-User` header when the proxy sets one; tracebacks and the ASGI server's own messages go to stderr.
 
 ## The clock
 
