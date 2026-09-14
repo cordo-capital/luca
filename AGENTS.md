@@ -29,6 +29,7 @@ It does **not** collect documents, interpret them, choose comptes, hold a brouil
 - The repository describes what exists. No roadmap, no planned feature, no reserved command, no unused table or column. GitHub issues are for people reporting a problem while using luca, not for planning.
 - Prefer removing to adding. Runtime dependencies are the MCP Python SDK, an ASGI server, and what they pull in. Nothing else.
 - The `Dockerfile` and the release workflow are packaging, not deployment: no path, no société, no port choice, no tunnel, no replication in the repository. That is the infrastructure of whoever deploys.
+- A release is a commit on `main` that raises `__version__` in `src/luca/__init__.py`. The workflow publishes the image and tags the commit; nobody pushes a tag by hand.
 - English everywhere except the terms above. Conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`).
 
 ## Commands

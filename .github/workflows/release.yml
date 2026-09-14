@@ -1,23 +1,53 @@
-name: image
+# Every push to main runs CI. When __version__ in src/luca/__init__.py names a version
+# that has no tag yet, the same run publishes the image and tags the commit: raising the
+# version on main is the release. A push that leaves the version alone publishes nothing.
+name: release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  publish:
+  version:
     needs: ci
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      minor: ${{ steps.read.outputs.minor }}
+      released: ${{ steps.read.outputs.released }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        name: The version in the package, and whether it is tagged already
+        run: |
+          version=$(sed -n 's/^__version__ = "\([^"]*\)".*/\1/p' src/luca/__init__.py)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "v$version is tagged already: nothing to publish"
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$version is new: publishing"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: version
+    if: needs.version.outputs.released == 'false'
+    runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: The tag is the package version
-        run: grep -q "^__version__ = \"${GITHUB_REF_NAME#v}\"" src/luca/__init__.py
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -30,8 +60,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=raw,value=${{ needs.version.outputs.minor }}
+            type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -40,3 +71,8 @@ jobs:
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+      - name: Tag the commit and publish the release, now that the image is out
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes
