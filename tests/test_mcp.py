@@ -34,11 +34,30 @@ def test_the_five_tools_and_only_them(url: str) -> None:
     assert [tool.name for tool in tools] == TOOLS
 
 
-def test_every_tool_description_starts_with_the_societe(url: str) -> None:
+def test_every_tool_description_and_title_start_with_the_societe(url: str) -> None:
     _, _, tools = mcp_tools(url)
     for tool in tools:
         assert tool.description is not None
         assert tool.description.startswith(f"{NAME} (SIREN {SIREN}): "), tool.name
+        assert tool.title is not None
+        assert tool.title.startswith(f"{NAME}: "), tool.name
+
+
+def test_every_tool_says_what_a_client_may_assume(url: str) -> None:
+    _, _, tools = mcp_tools(url)
+    hints = {}
+    for tool in tools:
+        assert tool.annotations is not None, tool.name
+        assert tool.annotations.destructive_hint is False, tool.name
+        assert tool.annotations.open_world_hint is False, tool.name
+        hints[tool.name] = (tool.annotations.read_only_hint, tool.annotations.idempotent_hint)
+    assert hints == {
+        "luca_add": (False, True),
+        "luca_query": (True, True),
+        "luca_add_compte": (False, False),
+        "luca_add_journal": (False, False),
+        "luca_open_exercice": (False, False),
+    }
 
 
 def test_luca_add_arguments_are_the_keys_of_post_add(url: str) -> None:

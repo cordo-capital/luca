@@ -16,7 +16,7 @@ It does **not** collect documents, interpret them, choose comptes, hold a brouil
 4. **What is accepted does not move.** Triggers refuse updates and deletes on `ecriture` and `ligne`. The only correction is an inverse écriture linked by `annule`.
 5. **The read path cannot write.** `?mode=ro`, `query_only`, an authorizer allowing only reads, an opcode budget. Never inspect the SQL text.
 6. **Every error has a stable code.** Clients branch on the code; the message may change, the code never. Same handlers and same errors over HTTP and MCP.
-7. **The société's identity is everywhere a client can see it.** `societe` in every response, `serverInfo.name`, the start of every tool description.
+7. **The société's identity is everywhere a client can see it.** `societe` in every response, `serverInfo.name`, the start of every tool title and description.
 8. **Days, never instants.** No timestamp in the store, no time zone but Europe/Paris for `valid_date`.
 9. **The names are frozen.** Routes, tools and error codes are a public API (ADR 0006).
 10. **French regulatory terms stay in French** and are identifiers: société, écriture, ligne, journal, compte, exercice, pièce, lib, annule, SIREN, EcritureNum, ValidDate. See `docs/spec/glossary.md`.
