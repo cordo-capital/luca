@@ -170,10 +170,13 @@ class Store:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 yield self._conn
+                self._conn.execute("COMMIT")
             except BaseException:
-                self._conn.execute("ROLLBACK")
+                # The body failed, or COMMIT did and may have left the transaction open:
+                # roll back, so the next write can begin.
+                if self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
                 raise
-            self._conn.execute("COMMIT")
 
     def read(self) -> sqlite3.Connection:
         """A fresh read-only connection: ``mode=ro``, ``query_only``, reads-only authorizer."""

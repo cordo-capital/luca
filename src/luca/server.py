@@ -90,25 +90,36 @@ def _summary(result: dict[str, Any]) -> str:
 
 def handle(
     store: Store, name: str, load: Callable[[], Any], handler: Handler, client: str
-) -> tuple[bool, dict[str, Any]]:
-    """Run one request: (accepted, response). Logs one line on stdout."""
+) -> tuple[int, dict[str, Any]]:
+    """Run one request: (HTTP status, response). Logs one line on stdout.
+
+    200 is accepted, 400 refused. 500 is luca itself failing — the disk, SQLite,
+    a bug: one ``INTERNAL_ERROR`` naming the exception, nothing written, and the
+    traceback logged at ERROR, which ``luca serve`` sends to stderr.
+    """
     societe = {"siren": store.siren, "name": store.name}
     document: Any = None
     try:
         document = load()
         result = handler(store, document)
     except ledger.Refused as exc:
+        status = 400
         outcome = "refused " + ",".join(e["code"] for e in exc.errors)
         body: dict[str, Any] = {"societe": societe, "errors": exc.errors}
-        accepted = False
+    except Exception as exc:
+        status = 500
+        failure = f"{type(exc).__name__}: {exc}"
+        outcome = f"failed {failure}"
+        body = {"societe": societe, "errors": [ledger.error("INTERNAL_ERROR", failure)]}
+        log.error("%s client=%s %s", name, client, outcome, exc_info=exc)
     else:
+        status = 200
         outcome = _summary(result)
         body = {"societe": societe, **result}
-        accepted = True
     request_id = document.get("request_id") if isinstance(document, dict) else None
     tag = f" request_id={request_id}" if isinstance(request_id, str) else ""
     log.info("%s client=%s%s %s", name, client, tag, outcome)
-    return accepted, body
+    return status, body
 
 
 # --- the five endpoints ----------------------------------------------------------
@@ -257,20 +268,20 @@ def build(store: Store) -> Starlette:
         headers = getattr(ctx.request, "headers", None)
         client = headers.get(IDENTITY_HEADER, "-") if headers is not None else "-"
         arguments = params.arguments or {}
-        accepted, body = await run_in_threadpool(
+        status, body = await run_in_threadpool(
             handle, store, endpoint.tool, lambda: arguments, endpoint.handler, client
         )
         return CallToolResult(
             content=[TextContent(type="text", text=json.dumps(body, ensure_ascii=False))],
             structured_content=body,
-            is_error=not accepted,
+            is_error=status != 200,
         )
 
     def route(endpoint: Endpoint) -> Route:
         async def respond(request: Request) -> Response:
             client = request.headers.get(IDENTITY_HEADER, "-")
             data = await request.body()
-            accepted, body = await run_in_threadpool(
+            status, body = await run_in_threadpool(
                 handle,
                 store,
                 f"POST {endpoint.route}",
@@ -278,7 +289,7 @@ def build(store: Store) -> Starlette:
                 endpoint.handler,
                 client,
             )
-            return JSONResponse(body, status_code=200 if accepted else 400)
+            return JSONResponse(body, status_code=status)
 
         return Route(endpoint.route, respond, methods=["POST"])
 

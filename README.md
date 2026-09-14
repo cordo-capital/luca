@@ -33,7 +33,7 @@ curl -s localhost:8000/add -d '{"request_id":"F2025-001","journal":"VE","date":"
 curl -s localhost:8000/query -d '{"sql":"SELECT journal_code, num, lib FROM ecriture"}'
 ```
 
-Every response carries `societe`. A refusal is a `400` with a list of errors, each with a stable `code`. The first error every new société meets is `NO_EXERCICE`.
+Every response carries `societe`. A refusal is a `400` with a list of errors, each with a stable `code`; luca's own failure is a `500` with the single code `INTERNAL_ERROR` and nothing written. The first error every new société meets is `NO_EXERCICE`.
 
 ## How it works
 

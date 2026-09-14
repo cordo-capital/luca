@@ -33,6 +33,7 @@ Tables are `STRICT`. Foreign keys are enforced on the write connection.
 - `BEGIN IMMEDIATE` takes the write lock at the start of the transaction. A deferred transaction would start as a read and try to upgrade at the first write, which is the one situation in which SQLite can refuse a transaction midway. The immediate form removes it.
 - `num` is `1 + max(num)` for the journal, read and written inside the same transaction under the same lock. Two concurrent `/add` cannot read the same maximum.
 - `isolation_level=None` stops Python's `sqlite3` from opening implicit transactions, so the transaction boundaries are exactly the ones written in the code.
+- A write that fails — a rule, the disk, `COMMIT` itself — is rolled back before the lock is released, so the next write always starts on a clean connection.
 
 **One read connection per query.** `/query` opens a fresh connection in `?mode=ro` for each request, with `PRAGMA query_only = 1`, an authorizer and an opcode budget ([query.md](query.md)), and closes it after. Nothing on the read path can write, and a slow query cannot hold the write connection.
 
