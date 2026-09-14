@@ -27,6 +27,7 @@ from mcp_types import (
     PaginatedRequestParams,
     TextContent,
     Tool,
+    ToolAnnotations,
 )
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -148,8 +149,21 @@ class Endpoint:
     tool: str
     route: str
     handler: Handler
+    title: str  # after "<name>: "
+    annotations: ToolAnnotations
     description: str  # after "<name> (SIREN <siren>): "
     schema: dict[str, Any]
+
+
+def _hints(*, read_only: bool = False, idempotent: bool = False) -> ToolAnnotations:
+    """What a client may assume: nothing is ever modified or deleted, nothing is reached
+    beyond the store; a repeat of luca_add is a replay, a repeat of the others a refusal."""
+    return ToolAnnotations(
+        read_only_hint=read_only,
+        destructive_hint=False,
+        idempotent_hint=idempotent,
+        open_world_hint=False,
+    )
 
 
 ENDPOINTS: tuple[Endpoint, ...] = (
@@ -157,6 +171,8 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         "luca_add",
         "/add",
         ledger.add,
+        "add an écriture",
+        _hints(idempotent=True),
         "record one écriture in the books, in double entry. Accepted whole — numbered, dated,"
         " immutable — or refused with nothing written and one error code per rule broken."
         " Same request_id and same content replays the original result. Optional annule"
@@ -199,6 +215,8 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         "luca_query",
         "/query",
         query.query,
+        "read the books",
+        _hints(read_only=True, idempotent=True),
         "read the books with one SQL statement on a read-only connection. Tables: societe,"
         " exercice, journal, compte, ecriture (journal_code, num, date, piece_ref, piece_date,"
         " lib, valid_date, request_id, annule_id), ligne (ecriture_id, idx, compte, lib, debit,"
@@ -220,6 +238,8 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         "luca_add_compte",
         "/compte",
         ledger.add_compte,
+        "add a compte",
+        _hints(),
         "add a compte to the plan comptable. Refuses an existing numero.",
         _object(
             {
@@ -233,6 +253,8 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         "luca_add_journal",
         "/journal",
         ledger.add_journal,
+        "add a journal",
+        _hints(),
         "add a journal. Refuses an existing code.",
         _object(
             {"code": {"type": "string", "description": "e.g. VE"}, "lib": _LIB}, ["code", "lib"]
@@ -242,6 +264,8 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         "luca_open_exercice",
         "/exercice",
         ledger.open_exercice,
+        "open the exercice",
+        _hints(),
         "open the exercice [date_start, date_end]. One per société; luca_add accepts only"
         " dates inside it. Refuses a second exercice.",
         _object({"date_start": _DATE, "date_end": _DATE}, ["date_start", "date_end"]),
@@ -259,8 +283,10 @@ def build(store: Store) -> Starlette:
     tools = [
         Tool(
             name=endpoint.tool,
+            title=f"{store.name}: {endpoint.title}",
             description=f"{who}: {endpoint.description}",
             input_schema=endpoint.schema,
+            annotations=endpoint.annotations,
         )
         for endpoint in ENDPOINTS
     ]

@@ -22,7 +22,7 @@ There is nothing else: no other route, no other tool, no CLI beyond `luca serve`
 "societe": {"siren": "123456789", "name": "ACME"}
 ```
 
-The server carries the identity of the société everywhere a client can see it: `societe` in every response, `serverInfo.name` equal to `--name`, and every tool description beginning with the name and the SIREN. Two luca servers side by side in one client are distinguishable by the model without help from the client.
+The server carries the identity of the société everywhere a client can see it: `societe` in every response, `serverInfo.name` equal to `--name`, every tool title beginning with the name, and every tool description beginning with the name and the SIREN. Two luca servers side by side in one client are distinguishable by the model without help from the client.
 
 **Refusal.** HTTP status `400` and a list of errors, every rule broken at once:
 
@@ -37,6 +37,8 @@ A refusal writes nothing. There is no partial acceptance.
 **Failure.** When luca itself fails — the disk, SQLite, a bug — the response is HTTP `500` (over MCP, `isError` true) with one error, `INTERNAL_ERROR`, whose message names the exception. Nothing was written: the transaction, if one was open, is rolled back. The traceback is on stderr. The next request is handled normally.
 
 The MCP SDK validates nothing: a tool's arguments reach the handler as they came, and the handler refuses them exactly as it refuses a request body — same codes, same messages. Calling a tool that does not exist is a JSON-RPC error (`-32602`), not a luca refusal.
+
+Each tool carries a `title` beginning with the société's name and the annotations a client may rely on: `readOnlyHint` true on `luca_query` only; `destructiveHint` false on every tool, since luca never modifies or deletes; `idempotentHint` true on `luca_add`, whose repeat is a replay ([canonical.md](canonical.md)), and on `luca_query`, false on the three others, whose repeat is a refusal; `openWorldHint` false everywhere, nothing reaches beyond the store.
 
 **Amounts** on the wire are decimal strings: `"1200.00"`. Never a JSON number, in or out.
 
