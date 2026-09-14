@@ -19,7 +19,7 @@ One server, one société, one SQLite file. The server is the only process that 
 
 The file name carries no meaning. The identity of the société is inside the file.
 
-Opening an existing file checks, before anything else, that `application_id` is `0x4C554341` and that `user_version` is not above the latest migration luca ships. A file failing either check is refused, untouched, and `serve` exits. Pending migrations are then applied, each in one transaction.
+Opening an existing file checks, before anything else, that `application_id` is `0x4C554341` and that `user_version` is not above the latest migration luca ships. A file failing either check is refused, untouched, and `serve` exits. Pending migrations are then applied, each in one transaction, and the file is put in WAL mode if it is not — a copy made by `VACUUM INTO` is in rollback-journal mode ([startup.md](startup.md#backup-and-restore)).
 
 The file is in WAL mode: readers never wait for the writer and the writer never waits for readers. The `-wal` and `-shm` files next to the database belong to it. A file copy is a backup only when the server is stopped; a live store is copied with `VACUUM INTO` or the SQLite backup API.
 
