@@ -149,6 +149,7 @@ class Store:
                     f" luca's is {APPLICATION_ID:#x}"
                 )
             migrate(conn)
+            conn.execute("PRAGMA journal_mode = WAL")  # a copy made by VACUUM INTO is not
             conn.execute("PRAGMA foreign_keys = ON")
             row = conn.execute("SELECT siren, name FROM societe WHERE id = 1").fetchone()
             if row is None:

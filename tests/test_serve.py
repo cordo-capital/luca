@@ -220,6 +220,26 @@ def test_create_refuses_an_existing_path(tmp_path: Path) -> None:
     assert db.read_bytes() == b"not a store"
 
 
+def test_open_puts_a_copy_made_by_vacuum_into_back_in_wal_mode(tmp_path: Path) -> None:
+    db, copy = tmp_path / "acme.db", tmp_path / "copy.db"
+    Store.create(db, siren=SIREN, name=NAME).close()
+    conn = sqlite3.connect(db, isolation_level=None)
+    conn.execute(f"VACUUM INTO '{copy}'")
+    conn.close()
+
+    def journal_mode() -> str:
+        conn = sqlite3.connect(copy)
+        mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0])
+        conn.close()
+        return mode
+
+    assert journal_mode() == "delete"
+    store = Store.open(copy)
+    assert (store.siren, store.name) == (SIREN, NAME)
+    store.close()
+    assert journal_mode() == "wal"
+
+
 def test_migrations_are_numbered_from_one_without_gaps() -> None:
     versions = [version for version, _ in luca_store.migrations()]
     assert versions == list(range(1, len(versions) + 1))
