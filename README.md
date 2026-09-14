@@ -67,6 +67,8 @@ container run --rm -v "$PWD/data:/data" -p 8000:8000 ghcr.io/cordo-capital/luca 
 
 `--siren` and `--name` create the store on the first run. Afterwards the image's default arguments, `--db /data/luca.db`, are enough: stop after the image name.
 
+`docker stop` closes the store and leaves one whole file under `/data`. To back it up, cold or live, and to restore it: [`docs/spec/startup.md`](docs/spec/startup.md#backup-and-restore).
+
 ### From source
 
 For working on luca: Python 3.12 or later and [uv](https://docs.astral.sh/uv/).
