@@ -50,7 +50,7 @@ src/luca/             cli.py (serve), store.py (file, schema, connections), ledg
                       query.py (read path), server.py (HTTP routes and MCP tools)
 src/luca/migrations/  numbered SQL migrations; 0001 is the schema
 tests/                pytest, against a server on a store in tmp_path
-Dockerfile            the image: python slim, pip install, non-root, /data
+Dockerfile            the image: the virtualenv from uv.lock on python slim, non-root, /data
 docs/spec/            the domain, one page per stable subject
 docs/decisions/       ADRs, numbered, immutable
 ```
