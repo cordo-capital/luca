@@ -75,6 +75,11 @@ def parse_body(data: bytes) -> Any:
     return document
 
 
+def _one_line(value: str) -> str:
+    """A log line stays one line: control characters, from a client value, are escaped."""
+    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in value)
+
+
 def _summary(result: dict[str, Any]) -> str:
     if "ecriture" in result:
         ecriture = result["ecriture"]
@@ -112,14 +117,14 @@ def handle(
         failure = f"{type(exc).__name__}: {exc}"
         outcome = f"failed {failure}"
         body = {"societe": societe, "errors": [ledger.error("INTERNAL_ERROR", failure)]}
-        log.error("%s client=%s %s", name, client, outcome, exc_info=exc)
+        log.error("%s", _one_line(f"{name} client={client} {outcome}"), exc_info=exc)
     else:
         status = 200
         outcome = _summary(result)
         body = {"societe": societe, **result}
     request_id = document.get("request_id") if isinstance(document, dict) else None
     tag = f" request_id={request_id}" if isinstance(request_id, str) else ""
-    log.info("%s client=%s%s %s", name, client, tag, outcome)
+    log.info("%s", _one_line(f"{name} client={client}{tag} {outcome}"))
     return status, body
 
 

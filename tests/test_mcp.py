@@ -197,3 +197,18 @@ def test_the_log_line_carries_the_forwarded_user(
         " refused NO_EXERCICE,UNKNOWN_COMPTE,UNKNOWN_COMPTE,UNKNOWN_COMPTE",
         "luca_query client=bob ok rows=1",
     ]
+
+
+def test_the_log_line_cannot_be_forged(
+    http: httpx.Client, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="luca")
+    forged = "x\nPOST /add client=admin accepted VE/999"
+    http.post("/add", json=document(request_id=forged), headers={"X-Forwarded-User": "a\tb"})
+    http.post("/journal", json={"code": "VE\rVE", "lib": "Ventes"})
+    assert caplog.messages == [
+        "POST /add client=a\\tb request_id=x\\nPOST /add client=admin accepted VE/999"
+        " refused NO_EXERCICE,UNKNOWN_JOURNAL,UNKNOWN_COMPTE,UNKNOWN_COMPTE,UNKNOWN_COMPTE",
+        "POST /journal client=- added VE\\rVE",
+    ]
+    assert all("\n" not in line and "\r" not in line for line in caplog.messages)
