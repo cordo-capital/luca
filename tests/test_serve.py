@@ -258,17 +258,25 @@ def raw(store: Store) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(
         """
+        INSERT INTO exercice (id, date_start, date_end) VALUES (1, '2025-01-01', '2025-12-31');
         INSERT INTO journal (code, lib) VALUES ('VE', 'Ventes');
         INSERT INTO compte (numero, lib) VALUES ('411000', 'Clients'), ('706000', 'Prestations');
-        INSERT INTO ecriture (id, journal_code, num, date, piece_ref, piece_date, lib, valid_date,
-                              request_id, request_hash)
-        VALUES (1, 'VE', 1, '2025-01-15', 'F1', '2025-01-15', 'Facture F1', '2025-01-20', 'r1',
+        INSERT INTO ecriture (id, exercice_id, journal_code, num, date, piece_ref, piece_date, lib,
+                              valid_date, request_id, request_hash)
+        VALUES (1, 1, 'VE', 1, '2025-01-15', 'F1', '2025-01-15', 'Facture F1', '2025-01-20', 'r1',
                 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
         INSERT INTO ligne (ecriture_id, idx, compte, debit, credit)
         VALUES (1, 0, '411000', 120000, 0), (1, 1, '706000', 0, 120000);
         """
     )
     return conn
+
+
+ECRITURE = (
+    "INSERT INTO ecriture (exercice_id, journal_code, num, date, piece_ref, piece_date, lib,"
+    " valid_date, request_id, request_hash, annule_id) VALUES (?, 'VE', ?, ?, 'F1',"
+    " '2025-01-15', 'Annulation', '2025-01-20', ?, '" + "0" * 64 + "', ?)"
+)
 
 
 def test_accepted_ecritures_and_lignes_are_immutable(raw: sqlite3.Connection) -> None:
@@ -294,21 +302,44 @@ def test_a_ligne_has_exactly_one_positive_integer_side(
         )
 
 
-def test_the_schema_holds_one_exercice_and_cancels_an_ecriture_once(
+def test_the_schema_cancels_an_ecriture_once_and_only_an_existing_one(
     raw: sqlite3.Connection,
 ) -> None:
-    raw.execute("INSERT INTO exercice (date_start, date_end) VALUES ('2025-01-01', '2025-12-31')")
+    raw.execute(ECRITURE, (1, 2, "2025-01-20", "r2", 1))
     with pytest.raises(sqlite3.IntegrityError):
-        raw.execute(
-            "INSERT INTO exercice (date_start, date_end) VALUES ('2026-01-01', '2026-12-31')"
-        )
-    ecriture = (
-        "INSERT INTO ecriture (journal_code, num, date, piece_ref, piece_date, lib, valid_date,"
-        " request_id, request_hash, annule_id) VALUES ('VE', ?, '2025-01-20', 'F1', '2025-01-15',"
-        " 'Annulation', '2025-01-20', ?, '" + "0" * 64 + "', 1)"
+        raw.execute(ECRITURE, (1, 3, "2025-01-20", "r3", 1))
+    with pytest.raises(sqlite3.IntegrityError):
+        raw.execute(ECRITURE, (1, 4, "2025-01-20", "r4", 99))
+
+
+def test_the_schema_numbers_per_journal_and_exercice(raw: sqlite3.Connection) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        raw.execute(ECRITURE, (1, 1, "2025-01-20", "r2", None))
+    with pytest.raises(sqlite3.IntegrityError):  # no such exercice
+        raw.execute(ECRITURE, (2, 1, "2026-01-20", "r2", None))
+    raw.execute(
+        "INSERT INTO exercice (id, date_start, date_end) VALUES (2, '2026-01-01', '2026-12-31')"
     )
-    raw.execute(ecriture, (2, "r2"))
-    with pytest.raises(sqlite3.IntegrityError):
-        raw.execute(ecriture, (3, "r3"))
-    with pytest.raises(sqlite3.IntegrityError):
-        raw.execute(ecriture.replace(", 1)", ", 99)"), (4, "r4"))
+    raw.execute(ECRITURE, (2, 1, "2026-01-20", "r2", None))
+    assert raw.execute("SELECT exercice_id, num FROM ecriture ORDER BY id").fetchall() == [
+        (1, 1),
+        (2, 1),
+    ]
+
+
+def test_an_exercice_is_immutable_but_for_closing_it(raw: sqlite3.Connection) -> None:
+    for statement in (
+        "UPDATE exercice SET date_start = '2025-02-01' WHERE id = 1",
+        "UPDATE exercice SET date_end = '2025-11-30' WHERE id = 1",
+        "DELETE FROM exercice WHERE id = 1",
+        "INSERT INTO exercice (date_start, date_end) VALUES ('2025-01-01', '2025-06-30')",
+        "INSERT INTO exercice (date_start, date_end) VALUES ('2025-06-30', '2025-12-31')",
+        "INSERT INTO exercice (date_start, date_end) VALUES ('2026-01-01', '2026-12-31', 2)",
+        "UPDATE exercice SET closed = 2 WHERE id = 1",
+    ):
+        with pytest.raises((sqlite3.IntegrityError, sqlite3.OperationalError)):
+            raw.execute(statement)
+    raw.execute("UPDATE exercice SET closed = 1 WHERE id = 1")
+    with pytest.raises(sqlite3.IntegrityError, match="closing"):
+        raw.execute("UPDATE exercice SET closed = 0 WHERE id = 1")
+    assert raw.execute("SELECT closed FROM exercice").fetchall() == [(1,)]

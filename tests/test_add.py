@@ -27,6 +27,7 @@ def test_add_records_the_ecriture_numbered_and_dated(books: httpx.Client) -> Non
         "id": 1,
         "journal": "VE",
         "num": 1,
+        "exercice": {"date_start": "2025-01-01", "date_end": "2025-12-31"},
         "date": "2025-01-15",
         "piece": {"ref": "F2025-001", "date": "2025-01-15"},
         "lib": "Facture F2025-001",
@@ -46,12 +47,37 @@ def test_add_records_the_ecriture_numbered_and_dated(books: httpx.Client) -> Non
     ]
 
 
-def test_add_numbers_continuously_per_journal(books: httpx.Client) -> None:
-    first = books.post("/add", json=document(request_id="a")).json()["ecriture"]
-    second = books.post("/add", json=document(request_id="b")).json()["ecriture"]
-    other = books.post("/add", json=document(request_id="c", journal="AC")).json()["ecriture"]
-    assert (first["num"], second["num"], other["num"]) == (1, 2, 1)
-    assert len({first["id"], second["id"], other["id"]}) == 3
+def test_add_numbers_continuously_per_journal_and_exercice(books: httpx.Client) -> None:
+    body = {"date_start": "2026-01-01", "date_end": "2026-12-31"}
+    assert books.post("/exercice", json=body).status_code == 200
+    accepted = []
+    for request_id, journal, date in (
+        ("a", "VE", "2025-01-15"),
+        ("b", "VE", "2025-03-01"),
+        ("c", "VE", "2026-02-01"),  # the next exercice, while 2025 is still open
+        ("d", "VE", "2025-12-31"),  # back in 2025: its own sequence goes on
+        ("e", "AC", "2026-02-01"),
+    ):
+        response = books.post(
+            "/add", json=document(request_id=request_id, journal=journal, date=date)
+        )
+        assert response.status_code == 200, response.text
+        ecriture = response.json()["ecriture"]
+        accepted.append((ecriture["exercice"]["date_end"], ecriture["journal"], ecriture["num"]))
+    assert accepted == [
+        ("2025-12-31", "VE", 1),
+        ("2025-12-31", "VE", 2),
+        ("2026-12-31", "VE", 1),
+        ("2025-12-31", "VE", 3),
+        ("2026-12-31", "AC", 1),
+    ]
+    assert rows(books, "SELECT exercice_id, journal_code, num FROM ecriture ORDER BY id") == [
+        [1, "VE", 1],
+        [1, "VE", 2],
+        [2, "VE", 1],
+        [1, "VE", 3],
+        [2, "AC", 1],
+    ]
 
 
 @pytest.mark.parametrize(
@@ -291,10 +317,30 @@ def test_the_first_add_of_a_new_societe_is_refused_with_no_exercice(http: httpx.
     assert rows(http, "SELECT count(*) FROM ecriture") == [[0]]
 
 
-def test_add_refuses_a_date_outside_the_exercice(books: httpx.Client) -> None:
+def test_add_refuses_a_date_in_no_exercice_naming_the_open_ones(books: httpx.Client) -> None:
     response = books.post("/add", json=document(date="2026-01-15"))
     assert codes(response) == ["DATE_OUTSIDE_EXERCICE"]
-    assert messages(response) == ["date 2026-01-15 is outside the exercice 2025-01-01 → 2025-12-31"]
+    assert messages(response) == [
+        "date 2026-01-15 is in no exercice; open: 2025-01-01 → 2025-12-31"
+    ]
+    assert books.post("/close", json={"date_end": "2025-12-31"}).status_code == 200
+    response = books.post("/add", json=document(date="2026-01-15"))
+    assert messages(response) == ["date 2026-01-15 is in no exercice; open: none"]
+
+
+def test_add_refuses_a_date_in_a_closed_exercice(books: httpx.Client) -> None:
+    assert books.post("/close", json={"date_end": "2025-12-31"}).status_code == 200
+    response = books.post("/add", json=document())
+    assert codes(response) == ["EXERCICE_CLOSED"]
+    assert messages(response) == [
+        "date 2025-01-15 is in the exercice 2025-01-01 → 2025-12-31, which is closed"
+    ]
+    assert rows(books, "SELECT count(*) FROM ecriture") == [[0]]
+    body = {"date_start": "2026-01-01", "date_end": "2026-12-31"}
+    assert books.post("/exercice", json=body).status_code == 200
+    response = books.post("/add", json=document(date="2026-01-15"))
+    assert response.status_code == 200, response.text
+    assert response.json()["ecriture"]["exercice"] == body
 
 
 def test_add_refuses_an_unknown_journal(books: httpx.Client) -> None:
@@ -340,7 +386,7 @@ def cancellation(**overrides: Any) -> dict[str, Any]:
         "request_id": "annule-F2025-001",
         "date": "2025-01-20",
         "lib": "Annulation facture F2025-001",
-        "annule": "VE/1",
+        "annule": 1,
         "lignes": INVERSE,
     }
     return document(**{**base, **overrides})
@@ -351,7 +397,7 @@ def test_add_accepts_the_exact_inverse_and_links_it(books: httpx.Client) -> None
     response = books.post("/add", json=cancellation())
     assert response.status_code == 200, response.text
     ecriture = response.json()["ecriture"]
-    assert (ecriture["journal"], ecriture["num"], ecriture["annule"]) == ("VE", 2, "VE/1")
+    assert (ecriture["journal"], ecriture["num"], ecriture["annule"]) == ("VE", 2, 1)
     assert rows(books, "SELECT id, annule_id FROM ecriture ORDER BY id") == [[1, None], [2, 1]]
 
 
@@ -359,15 +405,33 @@ def test_a_cancellation_is_itself_cancellable(books: httpx.Client) -> None:
     books.post("/add", json=document())
     books.post("/add", json=cancellation())
     lignes = document()["lignes"]
-    response = books.post("/add", json=cancellation(request_id="re", annule="VE/2", lignes=lignes))
+    response = books.post("/add", json=cancellation(request_id="re", annule=2, lignes=lignes))
     assert response.status_code == 200, response.text
-    assert response.json()["ecriture"]["annule"] == "VE/2"
+    assert response.json()["ecriture"]["annule"] == 2
+
+
+def test_an_ecriture_of_a_closed_exercice_is_cancelled_from_an_open_one(
+    books: httpx.Client,
+) -> None:
+    books.post("/add", json=document())
+    assert books.post("/close", json={"date_end": "2025-12-31"}).status_code == 200
+    assert codes(books.post("/add", json=cancellation())) == ["EXERCICE_CLOSED"]
+    body = {"date_start": "2026-01-01", "date_end": "2026-12-31"}
+    assert books.post("/exercice", json=body).status_code == 200
+    response = books.post("/add", json=cancellation(date="2026-01-20"))
+    assert response.status_code == 200, response.text
+    ecriture = response.json()["ecriture"]
+    assert (ecriture["exercice"], ecriture["num"], ecriture["annule"]) == (body, 1, 1)
+    assert rows(books, "SELECT id, exercice_id, annule_id FROM ecriture ORDER BY id") == [
+        [1, 1, None],
+        [2, 2, 1],
+    ]
 
 
 def test_add_refuses_annule_of_a_missing_ecriture(books: httpx.Client) -> None:
-    response = books.post("/add", json=cancellation(annule="VE/7"))
+    response = books.post("/add", json=cancellation(annule=7))
     assert codes(response) == ["ANNULE_NOT_FOUND"]
-    assert messages(response) == ["annule VE/7: no such écriture"]
+    assert messages(response) == ["annule 7: no such écriture"]
 
 
 @pytest.mark.parametrize(
@@ -398,12 +462,14 @@ def test_add_refuses_cancelling_twice(books: httpx.Client) -> None:
     books.post("/add", json=cancellation())
     response = books.post("/add", json=cancellation(request_id="again"))
     assert codes(response) == ["ANNULE_ALREADY_USED"]
-    assert messages(response) == ["annule VE/1: already cancelled by VE/2"]
+    assert messages(response) == ["annule 1: already cancelled by écriture 2"]
 
 
-@pytest.mark.parametrize("reference", ["VE", "VE/0", "VE/x", "/1", "", 1])
+@pytest.mark.parametrize("reference", ["VE/1", "1", 0, -1, 1.0, True, None, [1]])
 def test_add_refuses_a_malformed_annule(books: httpx.Client, reference: Any) -> None:
-    assert codes(books.post("/add", json=cancellation(annule=reference))) == ["INVALID_SHAPE"]
+    response = books.post("/add", json=cancellation(annule=reference))
+    assert codes(response) == ["INVALID_SHAPE"]
+    assert messages(response) == ["annule: not the id of an écriture, a positive integer"]
 
 
 def test_annule_is_part_of_the_canonical_content(books: httpx.Client) -> None:

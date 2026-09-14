@@ -10,6 +10,7 @@ The canonical form of an écriture is the JSON serialisation of the validated do
 - no whitespace: `,` and `:` as the only separators;
 - UTF-8, non-ASCII characters kept as they are;
 - amounts as integer centimes — JSON numbers — under their key: `"debit":120000`;
+- `annule`, when given, as the integer `id` it holds, a JSON number too;
 - optional keys absent when they were not given (`lib` on a ligne, `annule`);
 - every other value exactly as received, including `request_id`.
 

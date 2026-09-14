@@ -5,7 +5,7 @@ Status: accepted
 
 ## Context
 
-luca keeps the books of French companies, each with its own SIREN, its own plan comptable, its own exercice. Several sociétés may be kept on one host, by one person or one tool.
+luca keeps the books of French companies, each with its own SIREN, its own plan comptable, its exercices. Several sociétés may be kept on one host, by one person or one tool.
 
 ## Decision
 

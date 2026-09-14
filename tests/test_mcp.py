@@ -18,7 +18,14 @@ from luca import __version__
 
 from .conftest import NAME, SIREN, SOCIETE, document, mcp_call, mcp_tools
 
-TOOLS = ["luca_add", "luca_query", "luca_add_compte", "luca_add_journal", "luca_open_exercice"]
+TOOLS = [
+    "luca_add",
+    "luca_query",
+    "luca_add_compte",
+    "luca_add_journal",
+    "luca_open_exercice",
+    "luca_close_exercice",
+]
 
 
 def test_the_server_is_named_after_the_societe(url: str) -> None:
@@ -29,7 +36,7 @@ def test_the_server_is_named_after_the_societe(url: str) -> None:
     assert NAME in instructions and SIREN in instructions
 
 
-def test_the_five_tools_and_only_them(url: str) -> None:
+def test_the_six_tools_and_only_them(url: str) -> None:
     _, _, tools = mcp_tools(url)
     assert [tool.name for tool in tools] == TOOLS
 
@@ -48,7 +55,8 @@ def test_every_tool_says_what_a_client_may_assume(url: str) -> None:
     hints = {}
     for tool in tools:
         assert tool.annotations is not None, tool.name
-        assert tool.annotations.destructive_hint is False, tool.name
+        # closing an exercice is the one irreversible act
+        assert tool.annotations.destructive_hint is (tool.name == "luca_close_exercice")
         assert tool.annotations.open_world_hint is False, tool.name
         hints[tool.name] = (tool.annotations.read_only_hint, tool.annotations.idempotent_hint)
     assert hints == {
@@ -57,6 +65,7 @@ def test_every_tool_says_what_a_client_may_assume(url: str) -> None:
         "luca_add_compte": (False, False),
         "luca_add_journal": (False, False),
         "luca_open_exercice": (False, False),
+        "luca_close_exercice": (False, False),
     }
 
 
@@ -84,6 +93,7 @@ def test_luca_add_arguments_are_the_keys_of_post_add(url: str) -> None:
         add.input_schema["properties"]["lignes"]["items"]["properties"]["debit"]["type"] == "string"
     )
     assert add.input_schema["properties"]["lignes"]["maxItems"] == 1000
+    assert add.input_schema["properties"]["annule"]["type"] == "integer"
     read = next(tool for tool in tools if tool.name == "luca_query")
     assert set(read.input_schema["properties"]) == {"sql", "params"}
     assert read.input_schema["required"] == ["sql"]
@@ -101,7 +111,7 @@ def test_a_societe_is_built_and_written_to_over_mcp(url: str) -> None:
     assert not opened.is_error
     assert opened.structured_content == {
         "societe": SOCIETE,
-        "exercice": {"date_start": "2025-01-01", "date_end": "2025-12-31"},
+        "exercice": {"date_start": "2025-01-01", "date_end": "2025-12-31", "closed": False},
     }
     assert not mcp_call(url, "luca_add_journal", {"code": "VE", "lib": "Ventes"}).is_error
     for numero, lib in (("411000", "Clients"), ("706000", "Prestations"), ("445710", "TVA")):
@@ -122,6 +132,16 @@ def test_a_societe_is_built_and_written_to_over_mcp(url: str) -> None:
         "rows": [["VE", 1]],
         "truncated": False,
     }
+    closed = mcp_call(url, "luca_close_exercice", {"date_end": "2025-12-31"})
+    assert not closed.is_error, closed.content
+    assert closed.structured_content == {
+        "societe": SOCIETE,
+        "exercice": {"date_start": "2025-01-01", "date_end": "2025-12-31", "closed": True},
+    }
+    refused = mcp_call(url, "luca_add", document(request_id="late"))
+    assert refused.is_error
+    assert refused.structured_content is not None
+    assert [e["code"] for e in refused.structured_content["errors"]] == ["EXERCICE_CLOSED"]
 
 
 def test_http_and_mcp_share_replay(books: httpx.Client, url: str) -> None:
