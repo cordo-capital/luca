@@ -59,14 +59,14 @@ The MCP SDK validates nothing: a tool's arguments reach the handler as they came
 }
 ```
 
-Keys: `request_id`, `journal`, `date`, `piece` `{ref, date}`, `lib`, `lignes`, optional `annule` ([annule.md](annule.md)). Each ligne: `compte`, optional `lib`, and exactly one of `debit` or `credit`. Strings are non-empty. An amount is a string of digits with at most two decimals after a dot — `"1200"`, `"1200.5"`, `"1200.50"` — strictly positive and at most `92233720368547758.07`, the largest integer SQLite stores in centimes. `"1.005"` is refused, not rounded. A JSON number is refused.
+Keys: `request_id`, `journal`, `date`, `piece` `{ref, date}`, `lib`, `lignes`, optional `annule` ([annule.md](annule.md)). Two to 1000 lignes — the bound keeps one écriture from holding the write lock for long. Each ligne: `compte`, optional `lib`, and exactly one of `debit` or `credit`. Strings are non-empty. An amount is a string of digits with at most two decimals after a dot — `"1200"`, `"1200.5"`, `"1200.50"` — strictly positive and at most `92233720368547758.07`, the largest integer SQLite stores in centimes. `"1.005"` is refused, not rounded. A JSON number is refused.
 
 Rules, in order. Document rules are checked first and reported together; if they pass, store rules are checked together inside the accepting transaction.
 
 | # | Rule | Code |
 |---|---|---|
 | 1 | The body is a JSON object (HTTP) | `INVALID_JSON` |
-| 2 | Every key present, none unknown, every value of the right shape; at least two lignes; exactly one side per ligne | `INVALID_SHAPE`, one per fault |
+| 2 | Every key present, none unknown, every value of the right shape; two to 1000 lignes; exactly one side per ligne | `INVALID_SHAPE`, one per fault |
 | 3 | Sum of debits equals sum of credits | `UNBALANCED` |
 | 4 | Same `request_id` already accepted with the same canonical content: nothing is written, the original écriture is returned with `replay: true` ([canonical.md](canonical.md)) | — |
 | 5 | Same `request_id`, different content | `REQUEST_ID_CONFLICT`, with the existing `ecriture` |

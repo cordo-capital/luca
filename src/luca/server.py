@@ -174,7 +174,8 @@ ENDPOINTS: tuple[Endpoint, ...] = (
                 "lignes": {
                     "type": "array",
                     "minItems": 2,
-                    "description": "At least two; debits must equal credits",
+                    "maxItems": ledger.MAX_LIGNES,
+                    "description": f"Two to {ledger.MAX_LIGNES}; debits must equal credits",
                     "items": _object(
                         {
                             "compte": {"type": "string"},

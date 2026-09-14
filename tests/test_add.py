@@ -195,6 +195,22 @@ def test_add_refuses_fewer_than_two_lignes(books: httpx.Client) -> None:
     ]
 
 
+def test_add_accepts_up_to_and_refuses_beyond_max_lignes(books: httpx.Client) -> None:
+    assert ledger.MAX_LIGNES == 1000
+    half = ledger.MAX_LIGNES // 2
+    debits = [{"compte": "411000", "debit": "1"}] * half
+    credits = [{"compte": "706000", "credit": "1"}] * half
+    lignes = debits + credits
+    response = books.post("/add", json=document(lignes=lignes))
+    assert response.status_code == 200, response.text
+    assert rows(books, "SELECT count(*) FROM ligne") == [[ledger.MAX_LIGNES]]
+    one_more = [*lignes, {"compte": "411000", "debit": "1"}, {"compte": "706000", "credit": "1"}]
+    response = books.post("/add", json=document(request_id="big", lignes=one_more[:-1]))
+    assert codes(response) == ["INVALID_SHAPE"]
+    assert messages(response) == ["lignes: at most 1000 lignes"]
+    assert rows(books, "SELECT count(*) FROM ecriture") == [[1]]
+
+
 @pytest.mark.parametrize(
     ("ligne", "reason"),
     [
