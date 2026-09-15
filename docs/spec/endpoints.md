@@ -9,6 +9,7 @@ luca is one server on one port, reachable two ways with the same handlers and th
 | `luca_add_compte` | `POST /compte` | adds a compte; refuses a duplicate |
 | `luca_add_journal` | `POST /journal` | adds a journal; refuses a duplicate |
 | `luca_open_exercice` | `POST /exercice` | opens the next exercice; refuses a gap or an overlap |
+| `luca_lock` | `POST /lock` | locks an exercice through a day, or unlocks it; moves while the exercice is open |
 | `luca_close_exercice` | `POST /close` | closes an exercice, for good; refuses out of order |
 
 There is nothing else: no other route, no other tool, no CLI beyond `luca serve` ([startup.md](startup.md)).
@@ -39,7 +40,7 @@ A refusal writes nothing. There is no partial acceptance.
 
 The MCP SDK validates nothing: a tool's arguments reach the handler as they came, and the handler refuses them exactly as it refuses a request body — same codes, same messages. Calling a tool that does not exist is a JSON-RPC error (`-32602`), not a luca refusal.
 
-Each tool carries a `title` beginning with the société's name and the annotations a client may rely on: `readOnlyHint` true on `luca_query` only; `destructiveHint` false on every tool but `luca_close_exercice`, the one irreversible act — luca never modifies or deletes; `idempotentHint` true on `luca_add`, whose repeat is a replay ([canonical.md](canonical.md)), and on `luca_query`, false on the three others, whose repeat is a refusal; `openWorldHint` false everywhere, nothing reaches beyond the store.
+Each tool carries a `title` beginning with the société's name and the annotations a client may rely on: `readOnlyHint` true on `luca_query` only; `destructiveHint` true on `luca_close_exercice`, the one irreversible act, and on `luca_lock`, whose move back reopens days a client may want to confirm — false elsewhere, luca never deletes; `idempotentHint` true on `luca_add`, whose repeat is a replay ([canonical.md](canonical.md)), on `luca_query`, and on `luca_lock`, whose repeat sets the same lock, false on the three others, whose repeat is a refusal; `openWorldHint` false everywhere, nothing reaches beyond the store.
 
 **Amounts** on the wire are decimal strings: `"1200.00"`. Never a JSON number, in or out.
 
@@ -74,7 +75,7 @@ Rules, in order. Document rules are checked first and reported together; if they
 | 4 | Same `request_id` already accepted with the same canonical content: nothing is written, the original écriture is returned with `replay: true` ([canonical.md](canonical.md)) | — |
 | 5 | Same `request_id`, different content | `REQUEST_ID_CONFLICT`, with the existing `ecriture` |
 | 6 | An exercice exists | `NO_EXERCICE` — the message says to open one with `POST /exercice` (`luca_open_exercice`) |
-| 7 | `date` lies in an exercice, and that exercice is open | `DATE_OUTSIDE_EXERCICE`, the message lists the open exercices; `EXERCICE_CLOSED` |
+| 7 | `date` lies in an exercice, that exercice is open, and `date` is after its lock, if any | `DATE_OUTSIDE_EXERCICE`, the message lists the open exercices and their locks; `EXERCICE_CLOSED`; `DATE_LOCKED`, the message gives the lock |
 | 8 | The journal exists | `UNKNOWN_JOURNAL` |
 | 9 | Every compte exists | `UNKNOWN_COMPTE`, one per ligne |
 | 10 | `annule`, if present, is the `id` of an existing écriture, not yet cancelled, of which this one is the exact inverse | `ANNULE_NOT_FOUND`, `ANNULE_ALREADY_USED`, `ANNULE_NOT_INVERSE` |
@@ -115,11 +116,21 @@ A replay returns the same object with `replay: true`. The `ecriture` object is t
 
 ## `POST /exercice` — `luca_open_exercice`
 
-`{"date_start": "2025-01-01", "date_end": "2025-12-31"}` opens the next exercice. The first is free; after it, `date_start` must be the day after the last exercice's `date_end` — no gap, no overlap, no going back (`EXERCICE_NOT_CONTIGUOUS`, the message gives the expected day). Refuses `date_end` before `date_start` (`INVALID_EXERCICE`). No rule on the length. Several exercices may be open at once — the year turns before the previous one is done — and `/add` accepts a date inside any open one. Response: `{"societe": …, "exercice": {"date_start", "date_end", "closed": false}}`.
+`{"date_start": "2025-01-01", "date_end": "2025-12-31"}` opens the next exercice. The first is free; after it, `date_start` must be the day after the last exercice's `date_end` — no gap, no overlap, no going back (`EXERCICE_NOT_CONTIGUOUS`, the message gives the expected day). Refuses `date_end` before `date_start` (`INVALID_EXERCICE`). No rule on the length. Several exercices may be open at once — the year turns before the previous one is done — and `/add` accepts a date inside any open one. Response: `{"societe": …, "exercice": {"date_start", "date_end", "closed": false, "locked_through": null}}`.
+
+## `POST /lock` — `luca_lock`
+
+`{"date_end": "2026-12-31", "locked_through": "2026-08-31"}` names the exercice by its last day, as `/close` does, and locks it through a day: from then on no écriture dated on or before `locked_through` is accepted in it (`DATE_LOCKED` on `/add`). A month whose books are validated and whose TVA is declared does not move by accident.
+
+The lock moves while the exercice is open: forward as months are validated, back to reopen days, `null` to unlock. The same lock again is accepted and changes nothing. It is a guard against a mis-dated écriture, not a seal: luca does no authorisation (ADR [0003](../decisions/0003-auth-is-delegated.md)), and a client that can lock can unlock. The seal is the clôture, `/close`, and it is final (ADR [0008](../decisions/0008-an-exercice-is-locked-through-a-day.md)).
+
+A mistake in a locked month is corrected either by an inverse écriture dated after the lock ([annule.md](annule.md)) or by moving the lock; the tool on top chooses. Each exercice has its own lock: exercice N stays open, unlocked, for its bilan while the months of N+1 are locked one by one.
+
+Refuses a `date_end` that ends no exercice (`EXERCICE_NOT_FOUND`), a closed exercice (`EXERCICE_CLOSED`), and a `locked_through` that is not a day of that exercice (`INVALID_LOCK`). Response: `{"societe": …, "exercice": {"date_start", "date_end", "closed": false, "locked_through"}}`.
 
 ## `POST /close` — `luca_close_exercice`
 
-`{"date_end": "2025-12-31"}` names the exercice by its last day and closes it, for good: no écriture is accepted in it afterwards, and a mistake in it is corrected by an inverse écriture dated in an open exercice ([annule.md](annule.md)). There is no reopening. Refuses a `date_end` that ends no exercice (`EXERCICE_NOT_FOUND`), an exercice already closed (`EXERCICE_CLOSED`), and closing out of order — an older exercice still open (`EXERCICE_ORDER`, the message names it). Response: `{"societe": …, "exercice": {"date_start", "date_end", "closed": true}}`.
+`{"date_end": "2025-12-31"}` names the exercice by its last day and closes it, for good: no écriture is accepted in it afterwards, and a mistake in it is corrected by an inverse écriture dated in an open exercice ([annule.md](annule.md)). There is no reopening. Its lock, if any, stays where it was: a closed exercice refuses every écriture anyway, and its lock no longer moves. Refuses a `date_end` that ends no exercice (`EXERCICE_NOT_FOUND`), an exercice already closed (`EXERCICE_CLOSED`), and closing out of order — an older exercice still open (`EXERCICE_ORDER`, the message names it). Response: `{"societe": …, "exercice": {"date_start", "date_end", "closed": true, "locked_through"}}`.
 
 ## Error codes
 
@@ -131,7 +142,8 @@ A replay returns the same object with `replay: true`. The `ecriture` object is t
 | `REQUEST_ID_CONFLICT` | `/add` | same `request_id`, different content; carries `ecriture` |
 | `NO_EXERCICE` | `/add` | no exercice yet; open one with `POST /exercice` |
 | `DATE_OUTSIDE_EXERCICE` | `/add` | `date` is in no exercice; the message lists the open ones |
-| `EXERCICE_CLOSED` | `/add`, `/close` | the exercice holding `date` is closed; the exercice is already closed |
+| `EXERCICE_CLOSED` | `/add`, `/lock`, `/close` | the exercice holding `date` is closed; the exercice is closed, its lock does not move; the exercice is already closed |
+| `DATE_LOCKED` | `/add` | `date` is on or before the lock of its exercice; the message gives the lock |
 | `UNKNOWN_JOURNAL` | `/add` | the journal does not exist |
 | `UNKNOWN_COMPTE` | `/add` | a compte does not exist; one error per ligne |
 | `ANNULE_NOT_FOUND` | `/add` | `annule` names no écriture |
@@ -142,7 +154,8 @@ A replay returns the same object with `replay: true`. The `ecriture` object is t
 | `JOURNAL_EXISTS` | `/journal` | the `code` exists |
 | `INVALID_EXERCICE` | `/exercice` | `date_end` before `date_start` |
 | `EXERCICE_NOT_CONTIGUOUS` | `/exercice` | `date_start` is not the day after the last exercice ends |
-| `EXERCICE_NOT_FOUND` | `/close` | no exercice ends on `date_end` |
+| `INVALID_LOCK` | `/lock` | `locked_through` is not a day of the exercice ending on `date_end` |
+| `EXERCICE_NOT_FOUND` | `/lock`, `/close` | no exercice ends on `date_end` |
 | `EXERCICE_ORDER` | `/close` | an older exercice is still open |
 | `SQL_DENIED` | `/query` | the statement is not a read ([query.md](query.md)) |
 | `SQL_BUDGET` | `/query` | the statement exceeded its opcode budget |
@@ -151,4 +164,4 @@ A replay returns the same object with `replay: true`. The `ecriture` object is t
 
 ## Log
 
-luca does no authentication: it trusts whoever reaches it, and a tunnel or reverse proxy in front does the rest (ADR [0003](../decisions/0003-auth-is-delegated.md)). It logs one line per request on stdout, outside the store: the route or tool, the client identity if the proxy set an `X-Forwarded-User` header (`-` otherwise), the `request_id` for `/add`, and the result — `accepted VE/1`, `replay VE/1`, `refused NO_EXERCICE,UNKNOWN_JOURNAL`, `opened 2026-01-01 → 2026-12-31`, `closed 2025-01-01 → 2025-12-31`, `ok rows=12`, `failed OperationalError: disk I/O error`. Tracebacks go to stderr, never to stdout. A line is one line: a control character in a value the client chose — the identity, the `request_id`, a journal code — is escaped, so a client cannot forge a line.
+luca does no authentication: it trusts whoever reaches it, and a tunnel or reverse proxy in front does the rest (ADR [0003](../decisions/0003-auth-is-delegated.md)). It logs one line per request on stdout, outside the store: the route or tool, the client identity if the proxy set an `X-Forwarded-User` header (`-` otherwise), the `request_id` for `/add`, and the result — `accepted VE/1`, `replay VE/1`, `refused NO_EXERCICE,UNKNOWN_JOURNAL`, `opened 2026-01-01 → 2026-12-31`, `locked 2026-01-01 → 2026-12-31 through 2026-08-31`, `unlocked 2026-01-01 → 2026-12-31`, `closed 2025-01-01 → 2025-12-31`, `ok rows=12`, `failed OperationalError: disk I/O error`. Tracebacks go to stderr, never to stdout. A line is one line: a control character in a value the client chose — the identity, the `request_id`, a journal code — is escaped, so a client cannot forge a line.

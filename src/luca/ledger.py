@@ -1,4 +1,4 @@
-"""The write rules: /add, /compte, /journal, /exercice, /close (docs/spec/endpoints.md).
+"""The write rules: /add, /compte, /journal, /exercice, /lock, /close (docs/spec/endpoints.md).
 
 Each handler takes the store and one parsed JSON document, checks every rule
 it can, and either writes in one immediate transaction or raises ``Refused``
@@ -284,12 +284,23 @@ def ecriture_json(conn: sqlite3.Connection, ecriture_id: int) -> dict[str, Any]:
 
 
 def _exercice_json(row: tuple[Any, ...]) -> dict[str, Any]:
-    """An exercice as /exercice and /close return it: ``(date_start, date_end, closed)``."""
-    return {"date_start": row[0], "date_end": row[1], "closed": bool(row[2])}
+    """An exercice as /exercice, /lock and /close return it:
+    ``(date_start, date_end, closed, locked_through)``."""
+    return {
+        "date_start": row[0],
+        "date_end": row[1],
+        "closed": bool(row[2]),
+        "locked_through": row[3],
+    }
 
 
 def _span(row: tuple[Any, ...]) -> str:
     return f"{row[0]} → {row[1]}"
+
+
+def _span_and_lock(row: tuple[Any, ...]) -> str:
+    """``(date_start, date_end, locked_through)`` as the messages name an open exercice."""
+    return _span(row) + (f" locked through {row[2]}" if row[2] is not None else "")
 
 
 def _inverse(new: tuple[Ligne, ...], original: list[tuple[str, int, int]]) -> bool:
@@ -329,19 +340,20 @@ def add(store: Store, raw: Any) -> dict[str, Any]:
             )
         else:
             exercice = conn.execute(
-                "SELECT id, date_start, date_end, closed FROM exercice"
+                "SELECT id, date_start, date_end, closed, locked_through FROM exercice"
                 " WHERE date_start <= ? AND ? <= date_end",
                 (document.date, document.date),
             ).fetchone()
             if exercice is None:
                 open_ = conn.execute(
-                    "SELECT date_start, date_end FROM exercice WHERE closed = 0 ORDER BY date_start"
+                    "SELECT date_start, date_end, locked_through FROM exercice"
+                    " WHERE closed = 0 ORDER BY date_start"
                 ).fetchall()
                 errors.append(
                     error(
                         "DATE_OUTSIDE_EXERCICE",
                         f"date {document.date} is in no exercice; open:"
-                        f" {', '.join(_span(x) for x in open_) or 'none'}",
+                        f" {', '.join(_span_and_lock(x) for x in open_) or 'none'}",
                     )
                 )
             elif exercice[3]:
@@ -350,6 +362,15 @@ def add(store: Store, raw: Any) -> dict[str, Any]:
                         "EXERCICE_CLOSED",
                         f"date {document.date} is in the exercice {_span(exercice[1:])},"
                         " which is closed",
+                    )
+                )
+            elif exercice[4] is not None and document.date <= exercice[4]:
+                errors.append(
+                    error(
+                        "DATE_LOCKED",
+                        f"date {document.date} is on or before the lock {exercice[4]} of the"
+                        f" exercice {_span(exercice[1:])}: date it after {exercice[4]}, or move"
+                        " the lock with POST /lock (luca_lock)",
                     )
                 )
         if (
@@ -434,7 +455,7 @@ def add(store: Store, raw: Any) -> dict[str, Any]:
         return {"replay": False, "ecriture": ecriture_json(conn, ecriture_id)}
 
 
-# --- /compte, /journal, /exercice, /close ---------------------------------------
+# --- /compte, /journal, /exercice, /lock, /close --------------------------------
 
 
 def add_compte(store: Store, raw: Any) -> dict[str, Any]:
@@ -508,7 +529,47 @@ def open_exercice(store: Store, raw: Any) -> dict[str, Any]:
         if errors:
             raise Refused(errors)
         conn.execute("INSERT INTO exercice (date_start, date_end) VALUES (?, ?)", (start, end))
-    return {"exercice": _exercice_json((start, end, 0))}
+    return {"exercice": _exercice_json((start, end, 0, None))}
+
+
+def lock(store: Store, raw: Any) -> dict[str, Any]:
+    """Lock the exercice ending on ``date_end`` through a day, or unlock it with null.
+
+    The lock moves freely, forward or back, while the exercice is open. Setting the
+    same lock again is a no-op.
+    """
+    errors: list[Error] = []
+    keys = {"date_end", "locked_through"}
+    if not check_object(raw, "", keys, keys, errors):
+        raise Refused(errors)
+    end = day(raw, "date_end", "", errors)
+    through = None if raw["locked_through"] is None else day(raw, "locked_through", "", errors)
+    if errors or end is None:
+        raise Refused(errors)
+    with store.write() as conn:
+        exercice = conn.execute(
+            "SELECT id, date_start, date_end, closed FROM exercice WHERE date_end = ?", (end,)
+        ).fetchone()
+        if exercice is None:
+            raise Refused([error("EXERCICE_NOT_FOUND", f"no exercice ends on {end}")])
+        if exercice[3]:
+            errors.append(
+                error(
+                    "EXERCICE_CLOSED",
+                    f"the exercice {_span(exercice[1:])} is closed: its lock does not move",
+                )
+            )
+        if through is not None and not exercice[1] <= through <= exercice[2]:
+            errors.append(
+                error(
+                    "INVALID_LOCK",
+                    f"locked_through {through} is not a day of the exercice {_span(exercice[1:])}",
+                )
+            )
+        if errors:
+            raise Refused(errors)
+        conn.execute("UPDATE exercice SET locked_through = ? WHERE id = ?", (through, exercice[0]))
+    return {"exercice": _exercice_json((exercice[1], exercice[2], 0, through))}
 
 
 def close_exercice(store: Store, raw: Any) -> dict[str, Any]:
@@ -521,7 +582,9 @@ def close_exercice(store: Store, raw: Any) -> dict[str, Any]:
         raise Refused(errors)
     with store.write() as conn:
         exercice = conn.execute(
-            "SELECT id, date_start, date_end, closed FROM exercice WHERE date_end = ?", (end,)
+            "SELECT id, date_start, date_end, closed, locked_through FROM exercice"
+            " WHERE date_end = ?",
+            (end,),
         ).fetchone()
         if exercice is None:
             raise Refused([error("EXERCICE_NOT_FOUND", f"no exercice ends on {end}")])
@@ -543,4 +606,4 @@ def close_exercice(store: Store, raw: Any) -> dict[str, Any]:
         if errors:
             raise Refused(errors)
         conn.execute("UPDATE exercice SET closed = 1 WHERE id = ?", (exercice[0],))
-    return {"exercice": _exercice_json((exercice[1], exercice[2], 1))}
+    return {"exercice": _exercice_json((exercice[1], exercice[2], 1, exercice[4]))}

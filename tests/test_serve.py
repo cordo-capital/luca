@@ -327,7 +327,9 @@ def test_the_schema_numbers_per_journal_and_exercice(raw: sqlite3.Connection) ->
     ]
 
 
-def test_an_exercice_is_immutable_but_for_closing_it(raw: sqlite3.Connection) -> None:
+def test_an_exercice_is_immutable_but_for_closing_it_and_its_lock_while_open(
+    raw: sqlite3.Connection,
+) -> None:
     for statement in (
         "UPDATE exercice SET date_start = '2025-02-01' WHERE id = 1",
         "UPDATE exercice SET date_end = '2025-11-30' WHERE id = 1",
@@ -336,10 +338,21 @@ def test_an_exercice_is_immutable_but_for_closing_it(raw: sqlite3.Connection) ->
         "INSERT INTO exercice (date_start, date_end) VALUES ('2025-06-30', '2025-12-31')",
         "INSERT INTO exercice (date_start, date_end) VALUES ('2026-01-01', '2026-12-31', 2)",
         "UPDATE exercice SET closed = 2 WHERE id = 1",
+        "UPDATE exercice SET locked_through = '2024-12-31' WHERE id = 1",  # before the exercice
+        "UPDATE exercice SET locked_through = '2026-01-01' WHERE id = 1",  # after it
+        "UPDATE exercice SET locked_through = '30/06/2025' WHERE id = 1",
     ):
         with pytest.raises((sqlite3.IntegrityError, sqlite3.OperationalError)):
             raw.execute(statement)
+    # the lock moves freely while the exercice is open
+    for through in ("2025-06-30", "2025-01-01", None, "2025-12-31"):
+        raw.execute("UPDATE exercice SET locked_through = ? WHERE id = 1", (through,))
+        assert raw.execute("SELECT locked_through FROM exercice").fetchall() == [(through,)]
     raw.execute("UPDATE exercice SET closed = 1 WHERE id = 1")
     with pytest.raises(sqlite3.IntegrityError, match="closing"):
         raw.execute("UPDATE exercice SET closed = 0 WHERE id = 1")
-    assert raw.execute("SELECT closed FROM exercice").fetchall() == [(1,)]
+    with pytest.raises(sqlite3.IntegrityError, match="closing"):
+        raw.execute("UPDATE exercice SET locked_through = NULL WHERE id = 1")
+    assert raw.execute("SELECT closed, locked_through FROM exercice").fetchall() == [
+        (1, "2025-12-31")
+    ]

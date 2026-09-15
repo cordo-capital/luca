@@ -1,6 +1,6 @@
 """HTTP routes and MCP tools: the same handlers, the same errors (docs/spec/endpoints.md).
 
-``build`` returns the ASGI application of one société: six routes, six
+``build`` returns the ASGI application of one société: seven routes, seven
 tools on ``/mcp``, and the identity of the société everywhere a client can
 see it. The MCP SDK validates nothing: a tool's arguments reach the handler
 as they came, and the handler refuses them exactly as it refuses a request
@@ -81,24 +81,31 @@ def _one_line(value: str) -> str:
     return "".join(c if c.isprintable() else repr(c)[1:-1] for c in value)
 
 
-def _summary(result: dict[str, Any]) -> str:
-    if "ecriture" in result:
+def _summary(tool: str, result: dict[str, Any]) -> str:
+    """The outcome of an accepted request, as the log line says it."""
+    if tool == "luca_add":
         ecriture = result["ecriture"]
         verb = "replay" if result["replay"] else "accepted"
         return f"{verb} {ecriture['journal']}/{ecriture['num']}"
-    if "compte" in result:
+    if tool == "luca_query":
+        return f"ok rows={len(result['rows'])}" + (" truncated" if result["truncated"] else "")
+    if tool == "luca_add_compte":
         return f"added {result['compte']['numero']}"
-    if "journal" in result:
+    if tool == "luca_add_journal":
         return f"added {result['journal']['code']}"
-    if "exercice" in result:
-        exercice = result["exercice"]
-        verb = "closed" if exercice["closed"] else "opened"
-        return f"{verb} {exercice['date_start']} → {exercice['date_end']}"
-    return f"ok rows={len(result['rows'])}" + (" truncated" if result["truncated"] else "")
+    exercice = result["exercice"]
+    span = f"{exercice['date_start']} → {exercice['date_end']}"
+    if tool == "luca_open_exercice":
+        return f"opened {span}"
+    if tool == "luca_close_exercice":
+        return f"closed {span}"
+    if exercice["locked_through"] is None:
+        return f"unlocked {span}"
+    return f"locked {span} through {exercice['locked_through']}"
 
 
 def handle(
-    store: Store, name: str, load: Callable[[], Any], handler: Handler, client: str
+    store: Store, name: str, load: Callable[[], Any], endpoint: Endpoint, client: str
 ) -> tuple[int, dict[str, Any]]:
     """Run one request: (HTTP status, response). Logs one line on stdout.
 
@@ -110,7 +117,7 @@ def handle(
     document: Any = None
     try:
         document = load()
-        result = handler(store, document)
+        result = endpoint.handler(store, document)
     except ledger.Refused as exc:
         status = 400
         outcome = "refused " + ",".join(e["code"] for e in exc.errors)
@@ -123,7 +130,7 @@ def handle(
         log.error("%s", _one_line(f"{name} client={client} {outcome}"), exc_info=exc)
     else:
         status = 200
-        outcome = _summary(result)
+        outcome = _summary(endpoint.tool, result)
         body = {"societe": societe, **result}
     request_id = document.get("request_id") if isinstance(document, dict) else None
     tag = f" request_id={request_id}" if isinstance(request_id, str) else ""
@@ -131,7 +138,7 @@ def handle(
     return status, body
 
 
-# --- the six endpoints -----------------------------------------------------------
+# --- the seven endpoints ---------------------------------------------------------
 # The JSON schemas describe the documents to clients; the handlers enforce them.
 
 _AMOUNT = {
@@ -166,9 +173,10 @@ class Endpoint:
 def _hints(
     *, read_only: bool = False, idempotent: bool = False, destructive: bool = False
 ) -> ToolAnnotations:
-    """What a client may assume: nothing is ever modified or deleted, and nothing is reached
-    beyond the store. A repeat of luca_add is a replay, a repeat of the others a refusal.
-    Closing an exercice is the one irreversible act, the one a client may want to confirm."""
+    """What a client may assume: nothing is ever deleted, and nothing is reached beyond the
+    store. A repeat of luca_add is a replay, of luca_lock the same lock, of the others a
+    refusal. Closing an exercice is the one irreversible act, and moving a lock back reopens
+    days: the two a client may want to confirm."""
     return ToolAnnotations(
         read_only_hint=read_only,
         destructive_hint=destructive,
@@ -230,9 +238,10 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         "read the books",
         _hints(read_only=True, idempotent=True),
         "read the books with one SQL statement on a read-only connection. Tables: societe,"
-        " exercice (id, date_start, date_end, closed), journal, compte, ecriture (id,"
-        " exercice_id, journal_code, num, date, piece_ref, piece_date, lib, valid_date,"
-        " request_id, annule_id), ligne (ecriture_id, idx, compte, lib, debit, credit)."
+        " exercice (id, date_start, date_end, closed, locked_through), journal, compte,"
+        " ecriture (id, exercice_id, journal_code, num, date, piece_ref, piece_date, lib,"
+        " valid_date, request_id, annule_id), ligne (ecriture_id, idx, compte, lib, debit,"
+        " credit)."
         " Amounts are integer centimes. `SELECT name, sql FROM sqlite_master` gives"
         " the schema. Values go in params, bound to the ? of the statement. At most 1000 rows.",
         _object(
@@ -285,6 +294,28 @@ ENDPOINTS: tuple[Endpoint, ...] = (
         _object({"date_start": _DATE, "date_end": _DATE}, ["date_start", "date_end"]),
     ),
     Endpoint(
+        "luca_lock",
+        "/lock",
+        ledger.lock,
+        "lock an exercice through a day",
+        _hints(idempotent=True, destructive=True),
+        "lock the exercice ending on date_end through locked_through: no écriture dated on or"
+        " before that day is accepted afterwards, so a validated month does not move. Move the"
+        " lock forward as months are validated, back to reopen days, null to unlock; the same"
+        " lock again is a no-op. A closed exercice does not move.",
+        _object(
+            {
+                "date_end": {**_DATE, "description": "The last day of the exercice to lock"},
+                "locked_through": {
+                    "type": ["string", "null"],
+                    "pattern": _DATE["pattern"],
+                    "description": "The last locked day, YYYY-MM-DD, or null to unlock",
+                },
+            },
+            ["date_end", "locked_through"],
+        ),
+    ),
+    Endpoint(
         "luca_close_exercice",
         "/close",
         ledger.close_exercice,
@@ -334,7 +365,7 @@ def build(store: Store) -> Starlette:
         client = headers.get(IDENTITY_HEADER, "-") if headers is not None else "-"
         arguments = params.arguments or {}
         status, body = await run_in_threadpool(
-            handle, store, endpoint.tool, lambda: arguments, endpoint.handler, client
+            handle, store, endpoint.tool, lambda: arguments, endpoint, client
         )
         return CallToolResult(
             content=[TextContent(type="text", text=json.dumps(body, ensure_ascii=False))],
@@ -351,7 +382,7 @@ def build(store: Store) -> Starlette:
                 store,
                 f"POST {endpoint.route}",
                 lambda: parse_body(data),
-                endpoint.handler,
+                endpoint,
                 client,
             )
             return JSONResponse(body, status_code=status)
@@ -365,8 +396,8 @@ def build(store: Store) -> Starlette:
             f"luca keeps the books of {who}: écritures in journaux, in double entry,"
             " exercice after exercice. A société starts empty: open the first exercice, add"
             " journaux and comptes, then add écritures. Open the next exercice when the year"
-            " turns, close an exercice once its books are done, for good. Read anything with"
-            " luca_query."
+            " turns. Lock an exercice through the last validated day, month after month; close"
+            " it once its books are done, for good. Read anything with luca_query."
         ),
         on_list_tools=list_tools,
         on_call_tool=call_tool,

@@ -11,11 +11,16 @@ CREATE TABLE societe (
 -- Every exercice of the société, contiguous: each starts the day after the last ends.
 -- Contiguity is the server's rule, checked under the write lock like balance.
 CREATE TABLE exercice (
-    id         INTEGER PRIMARY KEY,                      -- in opening order
-    date_start TEXT    NOT NULL UNIQUE CHECK (date_start GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
-    date_end   TEXT    NOT NULL UNIQUE CHECK (date_end GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
-    closed     INTEGER NOT NULL DEFAULT 0 CHECK (closed IN (0, 1)),  -- 1 once closed, for good
-    CHECK (date_start <= date_end)
+    id             INTEGER PRIMARY KEY,                  -- in opening order
+    date_start     TEXT    NOT NULL UNIQUE CHECK (date_start GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    date_end       TEXT    NOT NULL UNIQUE CHECK (date_end GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    closed         INTEGER NOT NULL DEFAULT 0 CHECK (closed IN (0, 1)),  -- 1 once closed, for good
+    -- The lock: no écriture dated on or before this day is accepted. NULL when none.
+    -- Moved freely, forward or back, while the exercice is open; the trigger below holds it after.
+    locked_through TEXT    CHECK (locked_through IS NULL
+                                  OR locked_through GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    CHECK (date_start <= date_end),
+    CHECK (locked_through IS NULL OR (date_start <= locked_through AND locked_through <= date_end))
 ) STRICT;
 
 CREATE TABLE journal (
@@ -69,11 +74,13 @@ BEGIN SELECT RAISE(ABORT, 'ligne is immutable'); END;
 CREATE TRIGGER ligne_no_delete BEFORE DELETE ON ligne
 BEGIN SELECT RAISE(ABORT, 'ligne is immutable'); END;
 
--- An exercice is never deleted, its dates never change, and once closed it stays closed.
+-- An exercice is never deleted, its dates never change, once closed it stays closed,
+-- and its lock moves only while it is open.
 CREATE TRIGGER exercice_no_delete BEFORE DELETE ON exercice
 BEGIN SELECT RAISE(ABORT, 'exercice is immutable'); END;
 
 CREATE TRIGGER exercice_no_update BEFORE UPDATE ON exercice
 WHEN NEW.id <> OLD.id OR NEW.date_start <> OLD.date_start OR NEW.date_end <> OLD.date_end
      OR (OLD.closed = 1 AND NEW.closed = 0)
-BEGIN SELECT RAISE(ABORT, 'exercice is immutable but for closing it'); END;
+     OR (OLD.closed = 1 AND NEW.locked_through IS NOT OLD.locked_through)
+BEGIN SELECT RAISE(ABORT, 'exercice is immutable but for closing it and its lock while open'); END;

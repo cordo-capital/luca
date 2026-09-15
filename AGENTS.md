@@ -4,7 +4,7 @@ Instructions for anyone — human or model — working in this repository. Keep 
 
 ## What luca is
 
-luca is a server that owns one SQLite file and is the only process that writes to it. It keeps the books of one société: écritures in journaux, in double entry, exercice after exercice in one file. Every client — a script, a human in a chat, a language model — talks to the server over HTTP or MCP, on one port, with six names: `/add`, `/query`, `/compte`, `/journal`, `/exercice`, `/close` (`luca_add`, `luca_query`, `luca_add_compte`, `luca_add_journal`, `luca_open_exercice`, `luca_close_exercice`). The only command is `luca serve`.
+luca is a server that owns one SQLite file and is the only process that writes to it. It keeps the books of one société: écritures in journaux, in double entry, exercice after exercice in one file. Every client — a script, a human in a chat, a language model — talks to the server over HTTP or MCP, on one port, with seven names: `/add`, `/query`, `/compte`, `/journal`, `/exercice`, `/lock`, `/close` (`luca_add`, `luca_query`, `luca_add_compte`, `luca_add_journal`, `luca_open_exercice`, `luca_lock`, `luca_close_exercice`). The only command is `luca serve`.
 
 It does **not** collect documents, interpret them, choose comptes, hold a brouillard, run a review, call a language model, do lettrage, read or write FEC files, authenticate callers, serve a UI, or hold more than one société. If a feature needs any of that, it belongs to a tool built on top of luca, not here.
 
@@ -13,7 +13,7 @@ It does **not** collect documents, interpret them, choose comptes, hold a brouil
 1. **One server, one société, one file, one writer.** No multi-tenant code, no second process on the file, no connection pool on the write path. One write connection, one lock, `BEGIN IMMEDIATE` per write. (ADR 0001, 0002)
 2. **One écriture, one transaction, all or nothing.** `/add` accepts an écriture with its `num` and `valid_date` or writes nothing. Replay and conflict are decided on the canonical content, never on raw bytes (`docs/spec/canonical.md`).
 3. **Amounts are integer centimes.** `INTEGER` in SQLite, `int` in Python, decimal strings on the wire. Never a `float`, never `REAL`, never a JSON number for an amount. More than two decimals is a refusal, not a rounding.
-4. **What is accepted does not move.** Triggers refuse updates and deletes on `ecriture` and `ligne`. The only correction is an inverse écriture linked by `annule`. A closed exercice stays closed; it is corrected from an open one. (ADR 0007)
+4. **What is accepted does not move.** Triggers refuse updates and deletes on `ecriture` and `ligne`. The only correction is an inverse écriture linked by `annule`. A closed exercice stays closed; it is corrected from an open one. The lock of an open exercice is the one thing that moves, and only while it is open. (ADR 0007, 0008)
 5. **The read path cannot write.** `?mode=ro`, `query_only`, an authorizer allowing only reads, an opcode budget. Never inspect the SQL text.
 6. **Every error has a stable code.** Clients branch on the code; the message may change, the code never. Same handlers and same errors over HTTP and MCP.
 7. **The société's identity is everywhere a client can see it.** `societe` in every response, `serverInfo.name`, the start of every tool title and description.

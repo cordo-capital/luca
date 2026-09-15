@@ -15,6 +15,7 @@ French regulatory terms are identifiers in luca: they name tables, columns, JSON
 | **brouillard** | Provisional entries not yet validated, in most packages. luca has none. | draft journal |
 | **exercice** | Fiscal year, from `date_start` to `date_end`. A file holds every exercice of its société, contiguous; an exercice is open until closed. | fiscal year |
 | **clôture** | Closing an exercice: from then on no écriture is accepted in it, ever; `POST /close`. Not to be confused with the *date de clôture*, the last day of the exercice, `date_end`. | year-end close |
+| **verrouillage** | Locking a period against new écritures while the exercice stays open; reversible, in luca as in most packages. `locked_through` on the exercice, set by `POST /lock`: no écriture dated on or before it is accepted. Distinct from the clôture, which is final. | period lock |
 | **plan comptable** | The chart of accounts: the comptes an écriture may use. In luca, exactly the comptes added through `/compte`. | chart of accounts |
 | **compte** | An account of the plan comptable, identified by its `numero`. | account |
 | **pièce** | The supporting document of an écriture: `piece.ref`, `piece.date`. | voucher / source document |
