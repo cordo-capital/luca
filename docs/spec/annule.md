@@ -35,6 +35,6 @@ Checked with the other store rules, inside the accepting transaction ([endpoints
 | No écriture already cancels it — `annule_id` is unique in the schema | `ANNULE_ALREADY_USED` |
 | The lignes are the exact inverse | `ANNULE_NOT_INVERSE` |
 
-**Exact inverse**: the same number of lignes, in the same order, each with the same `compte`, and the debit of one equal to the credit of the other. Labels are free. The journal, the date, the pièce and the `lib` of the cancelling écriture are the client's choice; the date must be in an open exercice like any other — which is how a closed exercice is corrected, from the open one, without touching it.
+**Exact inverse**: the same number of lignes, in the same order, each with the same `compte`, and the debit of one equal to the credit of the other. Labels are free. The journal, the date, the pièce and the `lib` of the cancelling écriture are the client's choice; the date must be an open day like any other, in an open exercice and after its lock ([endpoints.md](endpoints.md)) — which is how a closed exercice, or a locked month, is corrected from a later day, without touching it.
 
 The cancelling écriture is an ordinary écriture: numbered in its journal and its exercice, immutable, and itself cancellable — cancelling a cancellation restores the original amounts.

@@ -19,6 +19,7 @@ That is the whole command line. A missing file is created with the identity of t
 | `luca_add_compte` | `POST /compte` | adds a compte; refuses a duplicate |
 | `luca_add_journal` | `POST /journal` | adds a journal; refuses a duplicate |
 | `luca_open_exercice` | `POST /exercice` | opens the next exercice; refuses a gap or an overlap |
+| `luca_lock` | `POST /lock` | locks an exercice through a day, or unlocks it; moves while the exercice is open |
 | `luca_close_exercice` | `POST /close` | closes an exercice, for good; refuses out of order |
 
 MCP is streamable HTTP on `/mcp`, same port, same handlers, same errors. The names are frozen.
@@ -31,6 +32,7 @@ curl -s localhost:8000/compte   -d '{"numero":"706000","lib":"Prestations"}'
 curl -s localhost:8000/add -d '{"request_id":"F2025-001","journal":"VE","date":"2025-01-15",
   "piece":{"ref":"F2025-001","date":"2025-01-15"},"lib":"Facture F2025-001",
   "lignes":[{"compte":"411000","debit":"1200.00"},{"compte":"706000","credit":"1200.00"}]}'
+curl -s localhost:8000/lock -d '{"date_end":"2025-12-31","locked_through":"2025-01-31"}'
 curl -s localhost:8000/query -d '{"sql":"SELECT num, lib FROM ecriture WHERE journal_code = ?","params":["VE"]}'
 ```
 
@@ -42,7 +44,7 @@ Every response carries `societe`. A refusal is a `400` with a list of errors, ea
 - **Replay-safe.** Every écriture carries a `request_id`. Same id and same canonical content is a replay of the original result; same id and different content is a conflict that returns the existing écriture.
 - **Exact amounts.** Decimal strings on the wire, integer centimes in the store, never a float.
 - **Immutable.** Accepted écritures never change; the only correction is an inverse écriture linked by `annule`.
-- **Exercice after exercice.** One file holds every exercice of the société, contiguous. An exercice is open until closed — several can be, the year turns before the books are done — and closing is the one irreversible act: a closed exercice is corrected only from an open one. `num` restarts with each exercice, so every FEC has an unbroken sequence.
+- **Exercice after exercice.** One file holds every exercice of the société, contiguous. An exercice is open until closed — several can be, the year turns before the books are done — and closing is the one irreversible act: a closed exercice is corrected only from an open one. Within an open exercice, the books are locked through a day as months are validated: no écriture dated on or before it is accepted. The lock moves, the clôture does not. `num` restarts with each exercice, so every FEC has an unbroken sequence.
 - **Read only means read only.** `/query` runs on a read-only connection with a SQLite authorizer, an opcode budget and a row cap. The SQL text is never inspected.
 - **No auth.** luca trusts whoever reaches it and logs one line per request on stdout. A tunnel or reverse proxy in front is the boundary.
 

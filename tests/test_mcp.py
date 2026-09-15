@@ -24,6 +24,7 @@ TOOLS = [
     "luca_add_compte",
     "luca_add_journal",
     "luca_open_exercice",
+    "luca_lock",
     "luca_close_exercice",
 ]
 
@@ -36,7 +37,7 @@ def test_the_server_is_named_after_the_societe(url: str) -> None:
     assert NAME in instructions and SIREN in instructions
 
 
-def test_the_six_tools_and_only_them(url: str) -> None:
+def test_the_seven_tools_and_only_them(url: str) -> None:
     _, _, tools = mcp_tools(url)
     assert [tool.name for tool in tools] == TOOLS
 
@@ -55,8 +56,10 @@ def test_every_tool_says_what_a_client_may_assume(url: str) -> None:
     hints = {}
     for tool in tools:
         assert tool.annotations is not None, tool.name
-        # closing an exercice is the one irreversible act
-        assert tool.annotations.destructive_hint is (tool.name == "luca_close_exercice")
+        # closing an exercice is the one irreversible act; moving a lock back reopens days
+        assert tool.annotations.destructive_hint is (
+            tool.name in ("luca_close_exercice", "luca_lock")
+        ), tool.name
         assert tool.annotations.open_world_hint is False, tool.name
         hints[tool.name] = (tool.annotations.read_only_hint, tool.annotations.idempotent_hint)
     assert hints == {
@@ -65,6 +68,7 @@ def test_every_tool_says_what_a_client_may_assume(url: str) -> None:
         "luca_add_compte": (False, False),
         "luca_add_journal": (False, False),
         "luca_open_exercice": (False, False),
+        "luca_lock": (False, True),
         "luca_close_exercice": (False, False),
     }
 
@@ -94,6 +98,9 @@ def test_luca_add_arguments_are_the_keys_of_post_add(url: str) -> None:
     )
     assert add.input_schema["properties"]["lignes"]["maxItems"] == 1000
     assert add.input_schema["properties"]["annule"]["type"] == "integer"
+    lock = next(tool for tool in tools if tool.name == "luca_lock")
+    assert set(lock.input_schema["required"]) == {"date_end", "locked_through"}
+    assert lock.input_schema["properties"]["locked_through"]["type"] == ["string", "null"]
     read = next(tool for tool in tools if tool.name == "luca_query")
     assert set(read.input_schema["properties"]) == {"sql", "params"}
     assert read.input_schema["required"] == ["sql"]
@@ -111,7 +118,12 @@ def test_a_societe_is_built_and_written_to_over_mcp(url: str) -> None:
     assert not opened.is_error
     assert opened.structured_content == {
         "societe": SOCIETE,
-        "exercice": {"date_start": "2025-01-01", "date_end": "2025-12-31", "closed": False},
+        "exercice": {
+            "date_start": "2025-01-01",
+            "date_end": "2025-12-31",
+            "closed": False,
+            "locked_through": None,
+        },
     }
     assert not mcp_call(url, "luca_add_journal", {"code": "VE", "lib": "Ventes"}).is_error
     for numero, lib in (("411000", "Clients"), ("706000", "Prestations"), ("445710", "TVA")):
@@ -132,11 +144,31 @@ def test_a_societe_is_built_and_written_to_over_mcp(url: str) -> None:
         "rows": [["VE", 1]],
         "truncated": False,
     }
+    locked = mcp_call(url, "luca_lock", {"date_end": "2025-12-31", "locked_through": "2025-01-31"})
+    assert not locked.is_error, locked.content
+    assert locked.structured_content == {
+        "societe": SOCIETE,
+        "exercice": {
+            "date_start": "2025-01-01",
+            "date_end": "2025-12-31",
+            "closed": False,
+            "locked_through": "2025-01-31",
+        },
+    }
+    refused = mcp_call(url, "luca_add", document(request_id="january"))
+    assert refused.is_error
+    assert refused.structured_content is not None
+    assert [e["code"] for e in refused.structured_content["errors"]] == ["DATE_LOCKED"]
     closed = mcp_call(url, "luca_close_exercice", {"date_end": "2025-12-31"})
     assert not closed.is_error, closed.content
     assert closed.structured_content == {
         "societe": SOCIETE,
-        "exercice": {"date_start": "2025-01-01", "date_end": "2025-12-31", "closed": True},
+        "exercice": {
+            "date_start": "2025-01-01",
+            "date_end": "2025-12-31",
+            "closed": True,
+            "locked_through": "2025-01-31",
+        },
     }
     refused = mcp_call(url, "luca_add", document(request_id="late"))
     assert refused.is_error

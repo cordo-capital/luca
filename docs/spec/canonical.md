@@ -28,7 +28,7 @@ The canonical form is computed only once the document has passed the shape and b
 
 Same `request_id`, same hash: nothing is written. The response is the écriture recorded the first time, with `replay: true` — `num`, `valid_date` and `id` are those of the original acceptance. A client that re-serialises the same écriture, or resends it after a timeout, gets a replay, never a conflict.
 
-Replay is checked first among the store rules, inside the transaction: a replayed request is not re-checked against the exercice, the journal or the comptes, which may not matter any more.
+Replay is checked first among the store rules, inside the transaction: a replayed request is not re-checked against the exercice, its lock, the journal or the comptes, which may not matter any more.
 
 ## Conflict
 

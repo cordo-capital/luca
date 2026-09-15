@@ -1,7 +1,8 @@
-"""POST /compte, /journal, /exercice, /close (docs/spec/endpoints.md)."""
+"""POST /compte, /journal, /exercice, /lock, /close (docs/spec/endpoints.md)."""
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
@@ -91,14 +92,15 @@ def test_journal_refuses_a_blank_code_or_label(http: httpx.Client) -> None:
 
 EXERCICE_2025 = {"date_start": "2025-01-01", "date_end": "2025-12-31"}
 EXERCICE_2026 = {"date_start": "2026-01-01", "date_end": "2026-12-31"}
+OPEN = {"closed": False, "locked_through": None}
 
 
 def test_exercice_is_opened(http: httpx.Client) -> None:
     response = http.post("/exercice", json=EXERCICE_2025)
     assert response.status_code == 200, response.text
-    assert response.json() == {"societe": SOCIETE, "exercice": {**EXERCICE_2025, "closed": False}}
-    assert rows(http, "SELECT id, date_start, date_end, closed FROM exercice") == [
-        [1, "2025-01-01", "2025-12-31", 0]
+    assert response.json() == {"societe": SOCIETE, "exercice": {**EXERCICE_2025, **OPEN}}
+    assert rows(http, "SELECT id, date_start, date_end, closed, locked_through FROM exercice") == [
+        [1, "2025-01-01", "2025-12-31", 0, None]
     ]
 
 
@@ -127,7 +129,7 @@ def test_the_next_exercice_starts_the_day_after_the_last_one_ends(http: httpx.Cl
     assert http.post("/exercice", json=EXERCICE_2025).status_code == 200
     response = http.post("/exercice", json=EXERCICE_2026)
     assert response.status_code == 200, response.text
-    assert response.json()["exercice"] == {**EXERCICE_2026, "closed": False}
+    assert response.json()["exercice"] == {**EXERCICE_2026, **OPEN}
     for start, end in (
         ("2027-01-02", "2027-12-31"),  # a gap
         ("2026-07-01", "2027-06-30"),  # an overlap
@@ -151,6 +153,115 @@ def test_exercice_reports_every_broken_rule_at_once(http: httpx.Client) -> None:
     assert codes(response) == ["INVALID_EXERCICE", "EXERCICE_NOT_CONTIGUOUS"]
 
 
+# --- /lock ----------------------------------------------------------------------
+
+
+def lock(http: httpx.Client, date_end: str, through: str | None) -> httpx.Response:
+    return http.post("/lock", json={"date_end": date_end, "locked_through": through})
+
+
+def test_lock_sets_the_last_locked_day_and_moves_freely_while_open(http: httpx.Client) -> None:
+    http.post("/exercice", json=EXERCICE_2025)
+    response = lock(http, "2025-12-31", "2025-08-31")
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "societe": SOCIETE,
+        "exercice": {**EXERCICE_2025, "closed": False, "locked_through": "2025-08-31"},
+    }
+    assert rows(http, "SELECT locked_through FROM exercice") == [["2025-08-31"]]
+    for through in ("2025-09-30", "2025-09-30", "2025-01-01", "2025-12-31", None, "2025-03-31"):
+        response = lock(http, "2025-12-31", through)
+        assert response.status_code == 200, (through, response.text)
+        assert response.json()["exercice"]["locked_through"] == through
+        assert rows(http, "SELECT locked_through FROM exercice") == [[through]]
+
+
+def test_lock_refuses_a_date_that_ends_no_exercice(http: httpx.Client) -> None:
+    http.post("/exercice", json=EXERCICE_2025)
+    response = lock(http, "2025-08-31", "2025-08-31")
+    assert codes(response) == ["EXERCICE_NOT_FOUND"]
+    assert messages(response) == ["no exercice ends on 2025-08-31"]
+    assert rows(http, "SELECT locked_through FROM exercice") == [[None]]
+
+
+@pytest.mark.parametrize("through", ["2024-12-31", "2026-01-01"])
+def test_lock_refuses_a_day_outside_the_exercice(http: httpx.Client, through: str) -> None:
+    http.post("/exercice", json=EXERCICE_2025)
+    response = lock(http, "2025-12-31", through)
+    assert codes(response) == ["INVALID_LOCK"]
+    assert messages(response) == [
+        f"locked_through {through} is not a day of the exercice 2025-01-01 → 2025-12-31"
+    ]
+    assert rows(http, "SELECT locked_through FROM exercice") == [[None]]
+
+
+def test_a_closed_exercice_keeps_its_lock(http: httpx.Client) -> None:
+    http.post("/exercice", json=EXERCICE_2025)
+    assert lock(http, "2025-12-31", "2025-06-30").status_code == 200
+    response = http.post("/close", json={"date_end": "2025-12-31"})
+    assert response.status_code == 200, response.text
+    assert response.json()["exercice"] == {
+        **EXERCICE_2025,
+        "closed": True,
+        "locked_through": "2025-06-30",
+    }
+    response = lock(http, "2025-12-31", None)
+    assert codes(response) == ["EXERCICE_CLOSED"]
+    assert messages(response) == [
+        "the exercice 2025-01-01 → 2025-12-31 is closed: its lock does not move"
+    ]
+    assert codes(lock(http, "2025-12-31", "2026-01-01")) == ["EXERCICE_CLOSED", "INVALID_LOCK"]
+    assert rows(http, "SELECT closed, locked_through FROM exercice") == [[1, "2025-06-30"]]
+
+
+def test_lock_logs_one_line(http: httpx.Client, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="luca")
+    http.post("/exercice", json=EXERCICE_2025)
+    lock(http, "2025-12-31", "2025-08-31")
+    lock(http, "2025-12-31", None)
+    assert [m for m in caplog.messages if m.startswith("POST /lock")] == [
+        "POST /lock client=- locked 2025-01-01 → 2025-12-31 through 2025-08-31",
+        "POST /lock client=- unlocked 2025-01-01 → 2025-12-31",
+    ]
+
+
+def test_exercices_are_locked_independently(http: httpx.Client) -> None:
+    http.post("/exercice", json=EXERCICE_2025)
+    http.post("/exercice", json=EXERCICE_2026)
+    # 2026 is validated month by month while 2025 stays open, unlocked, for its bilan
+    assert lock(http, "2026-12-31", "2026-03-31").status_code == 200
+    assert rows(http, "SELECT date_end, locked_through FROM exercice ORDER BY id") == [
+        ["2025-12-31", None],
+        ["2026-12-31", "2026-03-31"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("body", "reasons"),
+    [
+        ({}, ["date_end: missing", "locked_through: missing"]),
+        ({"date_end": "2025-12-31"}, ["locked_through: missing"]),
+        (
+            {"date_end": "2025-12-31", "locked_through": "31/08/2025"},
+            ["locked_through: '31/08/2025' is not a date (YYYY-MM-DD)"],
+        ),
+        ({"date_end": "2025-12-31", "locked_through": True}, ["locked_through: not a string"]),
+        (
+            {"date_end": "2025-12-31", "locked_through": "2025-08-31", "force": True},
+            ["force: unknown key"],
+        ),
+    ],
+)
+def test_lock_refuses_a_malformed_document(
+    http: httpx.Client, body: dict[str, Any], reasons: list[str]
+) -> None:
+    http.post("/exercice", json=EXERCICE_2025)
+    response = http.post("/lock", json=body)
+    assert codes(response) == ["INVALID_SHAPE"] * len(reasons)
+    assert messages(response) == reasons
+    assert rows(http, "SELECT locked_through FROM exercice") == [[None]]
+
+
 # --- /close ---------------------------------------------------------------------
 
 
@@ -158,7 +269,10 @@ def test_close_marks_the_exercice_closed_for_good(http: httpx.Client) -> None:
     http.post("/exercice", json=EXERCICE_2025)
     response = http.post("/close", json={"date_end": "2025-12-31"})
     assert response.status_code == 200, response.text
-    assert response.json() == {"societe": SOCIETE, "exercice": {**EXERCICE_2025, "closed": True}}
+    assert response.json() == {
+        "societe": SOCIETE,
+        "exercice": {**EXERCICE_2025, "closed": True, "locked_through": None},
+    }
     assert rows(http, "SELECT closed FROM exercice") == [[1]]
     response = http.post("/close", json={"date_end": "2025-12-31"})
     assert codes(response) == ["EXERCICE_CLOSED"]

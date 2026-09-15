@@ -323,6 +323,11 @@ def test_add_refuses_a_date_in_no_exercice_naming_the_open_ones(books: httpx.Cli
     assert messages(response) == [
         "date 2026-01-15 is in no exercice; open: 2025-01-01 → 2025-12-31"
     ]
+    assert lock(books, "2025-06-30").status_code == 200
+    response = books.post("/add", json=document(date="2026-01-15"))
+    assert messages(response) == [
+        "date 2026-01-15 is in no exercice; open: 2025-01-01 → 2025-12-31 locked through 2025-06-30"
+    ]
     assert books.post("/close", json={"date_end": "2025-12-31"}).status_code == 200
     response = books.post("/add", json=document(date="2026-01-15"))
     assert messages(response) == ["date 2026-01-15 is in no exercice; open: none"]
@@ -341,6 +346,43 @@ def test_add_refuses_a_date_in_a_closed_exercice(books: httpx.Client) -> None:
     response = books.post("/add", json=document(date="2026-01-15"))
     assert response.status_code == 200, response.text
     assert response.json()["ecriture"]["exercice"] == body
+
+
+def lock(http: httpx.Client, through: str | None) -> httpx.Response:
+    return http.post("/lock", json={"date_end": "2025-12-31", "locked_through": through})
+
+
+def test_add_refuses_a_date_on_or_before_the_lock(books: httpx.Client) -> None:
+    assert lock(books, "2025-01-31").status_code == 200
+    for date in ("2025-01-15", "2025-01-31"):
+        response = books.post("/add", json=document(request_id=date, date=date))
+        assert codes(response) == ["DATE_LOCKED"], date
+        assert messages(response) == [
+            f"date {date} is on or before the lock 2025-01-31 of the exercice"
+            " 2025-01-01 → 2025-12-31: date it after 2025-01-31, or move the lock with"
+            " POST /lock (luca_lock)"
+        ]
+    assert rows(books, "SELECT count(*) FROM ecriture") == [[0]]
+    response = books.post("/add", json=document(date="2025-02-01"))
+    assert response.status_code == 200, response.text
+    # the lock moves back: the day is open again
+    assert lock(books, None).status_code == 200
+    response = books.post("/add", json=document(request_id="late", date="2025-01-15"))
+    assert response.status_code == 200, response.text
+    assert rows(books, "SELECT num, date FROM ecriture ORDER BY id") == [
+        [1, "2025-02-01"],
+        [2, "2025-01-15"],
+    ]
+
+
+def test_a_replay_is_not_checked_against_the_lock(books: httpx.Client) -> None:
+    first = books.post("/add", json=document()).json()
+    assert lock(books, "2025-12-31").status_code == 200
+    response = books.post("/add", json=document())
+    assert response.status_code == 200, response.text
+    assert response.json() == {**first, "replay": True}
+    assert codes(books.post("/add", json=document(request_id="other"))) == ["DATE_LOCKED"]
+    assert rows(books, "SELECT count(*) FROM ecriture") == [[1]]
 
 
 def test_add_refuses_an_unknown_journal(books: httpx.Client) -> None:
@@ -426,6 +468,18 @@ def test_an_ecriture_of_a_closed_exercice_is_cancelled_from_an_open_one(
         [1, 1, None],
         [2, 2, 1],
     ]
+
+
+def test_an_ecriture_of_a_locked_month_is_cancelled_from_a_later_day(
+    books: httpx.Client,
+) -> None:
+    books.post("/add", json=document())
+    assert lock(books, "2025-01-31").status_code == 200
+    assert codes(books.post("/add", json=cancellation())) == ["DATE_LOCKED"]
+    response = books.post("/add", json=cancellation(date="2025-02-01"))
+    assert response.status_code == 200, response.text
+    ecriture = response.json()["ecriture"]
+    assert (ecriture["date"], ecriture["num"], ecriture["annule"]) == ("2025-02-01", 2, 1)
 
 
 def test_add_refuses_annule_of_a_missing_ecriture(books: httpx.Client) -> None:

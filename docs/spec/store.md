@@ -4,9 +4,9 @@ One server, one société, one SQLite file. The server is the only process that 
 
 ## Principles
 
-1. **One file, one société, every exercice.** Journaux and comptes are société-wide. Exercices are contiguous, opened in order, and open until closed; closing is the one irreversible act ([endpoints.md](endpoints.md)). Several may be open at once.
+1. **One file, one société, every exercice.** Journaux and comptes are société-wide. Exercices are contiguous, opened in order, and open until closed; closing is the one irreversible act ([endpoints.md](endpoints.md)). Several may be open at once. An open exercice may be locked through a day: no écriture dated on or before it is accepted, and the lock moves, forward or back, while the exercice is open.
 2. **The écriture is the unit.** It is accepted whole — balanced, numbered, dated — in one transaction, or refused with nothing written. There is no brouillard.
-3. **Accepted is immutable.** Triggers refuse every `UPDATE` and `DELETE` on `ecriture` and `ligne`, every `DELETE` on `exercice`, and every `UPDATE` on `exercice` but the one that closes it. The only correction is an inverse écriture linked to the one it cancels ([annule.md](annule.md)).
+3. **Accepted is immutable.** Triggers refuse every `UPDATE` and `DELETE` on `ecriture` and `ligne`, every `DELETE` on `exercice`, and every `UPDATE` on `exercice` but the one that closes it and the move of its lock while it is open. The only correction is an inverse écriture linked to the one it cancels ([annule.md](annule.md)).
 4. **Two identities.** `ecriture.id` is technical: stable, never reused, and what `annule` names. `num` is accounting: `EcritureNum`, continuous per journal within an exercice — the FEC is per exercice, and a gap in its sequence reads as a deletion — assigned inside the accepting transaction.
 5. **Exact amounts.** EUR in centimes, `INTEGER`. No floating point anywhere: not in the store, not in the server, not on the wire.
 6. **Days, never instants.** Every date in the store is a day written `YYYY-MM-DD`. No column holds a timestamp; the store has no creation time and an écriture no recording time. `valid_date` is the day of acceptance in Europe/Paris ([endpoints.md](endpoints.md)). The chronological order of validation is `valid_date`, then `id`.
@@ -42,13 +42,13 @@ Tables are `STRICT`. Foreign keys are enforced on the write connection.
 | Table | Columns | Written by |
 |---|---|---|
 | `societe` | one row, `id = 1`: `siren` (nine digits), `name` | `serve`, at creation |
-| `exercice` | `id` (in opening order), `date_start`, `date_end` (not before `date_start`), `closed` (`0` or `1`) | `/exercice`, `/close` |
+| `exercice` | `id` (in opening order), `date_start`, `date_end` (not before `date_start`), `closed` (`0` or `1`), `locked_through` (a day of the exercice, or `NULL`) | `/exercice`, `/lock`, `/close` |
 | `journal` | `code`, `lib` | `/journal` |
 | `compte` | `numero` (three characters or more), `lib` | `/compte` |
 | `ecriture` | `id`, `exercice_id`, `journal_code`, `num`, `date`, `piece_ref`, `piece_date`, `lib`, `valid_date`, `request_id`, `request_hash`, `annule_id` | `/add` |
 | `ligne` | `(ecriture_id, idx)`, `compte`, `lib` (optional), `debit`, `credit` | `/add` |
 
-Constraints that matter: `UNIQUE (exercice_id, journal_code, num)`; `date_start` and `date_end` are unique among exercices; every `exercice_id`, `journal_code`, `compte`, `annule_id` is a foreign key; every date is `YYYY-MM-DD`; `request_id` is unique and non-empty; `request_hash` is a 64-character hex digest ([canonical.md](canonical.md)); `annule_id` is unique, so an écriture is cancelled at most once; labels are non-empty; `debit` and `credit` are non-negative integers and exactly one of the two is strictly positive.
+Constraints that matter: `UNIQUE (exercice_id, journal_code, num)`; `date_start` and `date_end` are unique among exercices; `locked_through`, when set, is a day of its exercice; every `exercice_id`, `journal_code`, `compte`, `annule_id` is a foreign key; every date is `YYYY-MM-DD`; `request_id` is unique and non-empty; `request_hash` is a 64-character hex digest ([canonical.md](canonical.md)); `annule_id` is unique, so an écriture is cancelled at most once; labels are non-empty; `debit` and `credit` are non-negative integers and exactly one of the two is strictly positive.
 
 Every column is written by an endpoint. There is no other table.
 
